@@ -10,10 +10,13 @@ public class CorsConfig {
 
     @Bean
     public WebMvcConfigurer corsConfigurer() {
-        java.lang.String originsEnv = System.getenv("FRONTEND_ORIGINS");
+        String originsEnv = System.getenv("FRONTEND_ORIGINS");
+        System.out.println("FRONTEND_ORIGINS env = [" + originsEnv + "]");
         final String[] allowedOrigins;
         if (originsEnv != null && !originsEnv.isBlank()) {
-            allowedOrigins = originsEnv.split(",");
+            allowedOrigins = Arrays.stream(originsEnv.split(","))
+                                .map(String::trim)
+                                .toArray(String[]::new);
         } else {
             allowedOrigins = new String[] { "http://localhost:3000" };
         }
