@@ -10,11 +10,19 @@ public class CorsConfig {
 
     @Bean
     public WebMvcConfigurer corsConfigurer() {
+        java.lang.String originsEnv = System.getenv("FRONTEND_ORIGINS");
+        final String[] allowedOrigins;
+        if (originsEnv != null && !originsEnv.isBlank()) {
+            allowedOrigins = originsEnv.split(",");
+        } else {
+            allowedOrigins = new String[] { "http://localhost:3000" };
+        }
+
         return new WebMvcConfigurer() {
             @Override
             public void addCorsMappings(CorsRegistry registry) {
                 registry.addMapping("/**")
-                        .allowedOrigins("http://localhost:3000")
+                        .allowedOrigins(allowedOrigins)
                         .allowedMethods("*")
                         .allowCredentials(true);
             }
