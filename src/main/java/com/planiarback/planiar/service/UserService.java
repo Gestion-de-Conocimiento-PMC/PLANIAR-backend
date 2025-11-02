@@ -299,10 +299,10 @@ public class UserService {
     public void recalculateAvailableHours(User user) {
         if (user == null || user.getId() == null) return;
 
-        Map<String, Integer> result = new HashMap<>();
+    Map<String, java.util.List<String>> result = new HashMap<>();
         String[] dayNames = new String[]{"SUN","MON","TUE","WED","THU","FRI","SAT"};
-        // occupied minutes per day
-        long[] occupiedMinutes = new long[7];
+    // occupied intervals per day -> mark occupied hourly slots
+    boolean[][] occupied = new boolean[7][24];
 
         // Classes
         List<Class> classes = classRepository.findByUserId(user.getId());
@@ -319,9 +319,14 @@ public class UserService {
                 try {
                     LocalTime st = LocalTime.parse(s);
                     LocalTime en = LocalTime.parse(e);
-                    long minutes = Duration.between(st, en).toMinutes();
-                    if (minutes < 0) minutes = 0;
-                    occupiedMinutes[i] += minutes;
+                    // mark hourly slots overlapped by this interval
+                    for (int h = 0; h < 24; h++) {
+                        LocalTime slotStart = LocalTime.of(h, 0);
+                        LocalTime slotEnd = slotStart.plusHours(1);
+                        if (st.isBefore(slotEnd) && en.isAfter(slotStart)) {
+                            occupied[i][h] = true;
+                        }
+                    }
                 } catch (Exception ex) {
                     // ignore parse errors
                 }
@@ -343,9 +348,13 @@ public class UserService {
                 try {
                     LocalTime st = LocalTime.parse(s);
                     LocalTime en = LocalTime.parse(e);
-                    long minutes = Duration.between(st, en).toMinutes();
-                    if (minutes < 0) minutes = 0;
-                    occupiedMinutes[i] += minutes;
+                    for (int h = 0; h < 24; h++) {
+                        LocalTime slotStart = LocalTime.of(h, 0);
+                        LocalTime slotEnd = slotStart.plusHours(1);
+                        if (st.isBefore(slotEnd) && en.isAfter(slotStart)) {
+                            occupied[i][h] = true;
+                        }
+                    }
                 } catch (Exception ex) {
                     // ignore parse errors
                 }
@@ -360,28 +369,43 @@ public class UserService {
             int idx = d.getDayOfWeek().getValue() % 7; // Sunday -> 0
             try {
                 if (t.getStartTime() != null && t.getEndTime() != null) {
-                    long minutes = Duration.between(t.getStartTime(), t.getEndTime()).toMinutes();
-                    if (minutes > 0) occupiedMinutes[idx] += minutes;
-                } else {
-                    Integer est = t.getEstimatedTime();
-                    if (est != null && est > 0) occupiedMinutes[idx] += est;
+                    LocalTime st = t.getStartTime();
+                    LocalTime en = t.getEndTime();
+                    for (int h = 0; h < 24; h++) {
+                        LocalTime slotStart = LocalTime.of(h, 0);
+                        LocalTime slotEnd = slotStart.plusHours(1);
+                        if (st.isBefore(slotEnd) && en.isAfter(slotStart)) {
+                            occupied[idx][h] = true;
+                        }
+                    }
                 }
             } catch (Exception ex) {
                 // ignore
             }
         }
-
+        // Build free hourly slots per day as List<String>
         for (int i = 0; i < 7; i++) {
-            long freeMinutes = 24 * 60 - occupiedMinutes[i];
-            if (freeMinutes <= 0) continue; // only include days with free time
-            int freeHours = (int) (freeMinutes / 60); // floor hours
-            result.put(dayNames[i], freeHours);
+            java.util.List<String> slots = new java.util.ArrayList<>();
+            for (int h = 0; h < 24; h++) {
+                if (!occupied[i][h]) {
+                    int end = (h + 1) % 24;
+                    slots.add(String.format("%02d:00-%02d:00", h, end));
+                }
+            }
+            if (!slots.isEmpty()) {
+                result.put(dayNames[i], slots);
+            }
         }
 
-        // If user has no schedule entries, default to all days 24 hours
+        // If user has no schedule entries (result empty), default to all days full-day slots
         if (result.isEmpty()) {
+            java.util.List<String> all = new java.util.ArrayList<>();
+            for (int h = 0; h < 24; h++) {
+                int end = (h + 1) % 24;
+                all.add(String.format("%02d:00-%02d:00", h, end));
+            }
             for (String dName : dayNames) {
-                result.put(dName, 24);
+                result.put(dName, new java.util.ArrayList<>(all));
             }
         }
 

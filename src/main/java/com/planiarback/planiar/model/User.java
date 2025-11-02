@@ -10,6 +10,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
+import jakarta.persistence.Convert;
+import com.planiarback.planiar.util.MapJsonConverter;
 
 @Entity
 @Table(name = "users")
@@ -46,13 +48,12 @@ public class User {
     @JsonIgnore
     private List<Activity> activities = new ArrayList<>();
 
-    // Available hours per day (key: SUN,MON,TUE,WED,THU,FRI,SAT), value: available hours (integer)
-    @ElementCollection
-    @CollectionTable(name = "user_available_hours", joinColumns = @JoinColumn(name = "user_id"))
-    // avoid reserved keywords like 'day' in SQL engines by using a safe column name
-    @MapKeyColumn(name = "day_name")
-    @Column(name = "hours")
-    private Map<String, Integer> availableHours = new HashMap<>();
+    // Available free hourly slots per day.
+    // Key: SUN,MON,TUE,WED,THU,FRI,SAT
+    // Value: comma-separated list of slots in format "HH:00-HH+1:00", e.g. "00:00-01:00,01:00-02:00"
+    @Column(name = "available_hours", columnDefinition = "TEXT")
+    @Convert(converter = MapJsonConverter.class)
+    private Map<String, java.util.List<String>> availableHours = new HashMap<>();
 
     /**
      * @return Long return the id
@@ -167,16 +168,16 @@ public class User {
     }
 
     /**
-     * @return Map<String,Integer> available hours per day
+     * @return Map<String,List<String>> available slots per day as lists of slot strings
      */
-    public Map<String, Integer> getAvailableHours() {
+    public Map<String, java.util.List<String>> getAvailableHours() {
         return availableHours;
     }
 
     /**
-     * @param availableHours the availableHours map to set
+     * @param availableHours the availableHours map to set (value format: list of slot strings)
      */
-    public void setAvailableHours(Map<String, Integer> availableHours) {
+    public void setAvailableHours(Map<String, java.util.List<String>> availableHours) {
         this.availableHours = availableHours;
     }
 
