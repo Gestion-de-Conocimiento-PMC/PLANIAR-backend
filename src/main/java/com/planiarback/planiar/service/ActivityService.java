@@ -21,10 +21,12 @@ public class ActivityService {
 
     private final ActivityRepository activityRepository;
     private final UserRepository userRepository;
+    private final UserService userService;
 
-    public ActivityService(ActivityRepository activityRepository, UserRepository userRepository) {
+    public ActivityService(ActivityRepository activityRepository, UserRepository userRepository, UserService userService) {
         this.activityRepository = activityRepository;
         this.userRepository = userRepository;
+        this.userService = userService;
     }
 
     /**
@@ -36,7 +38,9 @@ public class ActivityService {
         
         activity.setUser(user);
         validateActivity(activity);
-        return activityRepository.save(activity);
+        Activity saved = activityRepository.save(activity);
+        userService.recalculateAvailableHours(user);
+        return saved;
     }
 
     /**
@@ -153,16 +157,20 @@ public class ActivityService {
         activity.setColor(activityDetails.getColor());
 
         validateActivity(activity);
-        return activityRepository.save(activity);
+        Activity saved = activityRepository.save(activity);
+        userService.recalculateAvailableHours(activity.getUser());
+        return saved;
     }
 
     /**
      * Eliminar una actividad
      */
     public void deleteActivity(Long id) {
-        Activity activity = activityRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Actividad no encontrada con id: " + id));
-        activityRepository.delete(activity);
+    Activity activity = activityRepository.findById(id)
+        .orElseThrow(() -> new RuntimeException("Actividad no encontrada con id: " + id));
+    User user = activity.getUser();
+    activityRepository.delete(activity);
+    if (user != null) userService.recalculateAvailableHours(user);
     }
 
     /**
@@ -170,6 +178,7 @@ public class ActivityService {
      */
     public void deleteAllUserActivities(Long userId) {
         activityRepository.deleteByUserId(userId);
+        userRepository.findById(userId).ifPresent(userService::recalculateAvailableHours);
     }
 
     /**

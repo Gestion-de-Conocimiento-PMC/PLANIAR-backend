@@ -1,11 +1,23 @@
 package com.planiarback.planiar.service;
 
+import com.planiarback.planiar.model.Activity;
+import com.planiarback.planiar.model.Class;
+import com.planiarback.planiar.model.Task;
 import com.planiarback.planiar.model.User;
+import com.planiarback.planiar.repository.ActivityRepository;
+import com.planiarback.planiar.repository.ClassRepository;
+import com.planiarback.planiar.repository.TaskRepository;
 import com.planiarback.planiar.repository.UserRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
+import java.time.DayOfWeek;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 @Service
@@ -13,9 +25,18 @@ import java.util.Optional;
 public class UserService {
 
     private final UserRepository userRepository;
+    private final TaskRepository taskRepository;
+    private final ClassRepository classRepository;
+    private final ActivityRepository activityRepository;
 
-    public UserService(UserRepository userRepository) {
+    public UserService(UserRepository userRepository,
+                       TaskRepository taskRepository,
+                       ClassRepository classRepository,
+                       ActivityRepository activityRepository) {
         this.userRepository = userRepository;
+        this.taskRepository = taskRepository;
+        this.classRepository = classRepository;
+        this.activityRepository = activityRepository;
     }
 
     /**
@@ -32,8 +53,8 @@ public class UserService {
             throw new IllegalArgumentException("El email ya está registrado");
         }
         
-        if (user.getAdmin() == null) {
-            user.setAdmin(false);
+        if (user.getType() == null || user.getType().trim().isEmpty()) {
+            user.setType("user");
         }
         
         return userRepository.save(user);
@@ -92,7 +113,7 @@ public class UserService {
      */
     @Transactional(readOnly = true)
     public List<User> getAllAdminUsers() {
-        return userRepository.findByAdminTrue();
+        return userRepository.findByType("admin");
     }
 
     /**
@@ -100,7 +121,7 @@ public class UserService {
      */
     @Transactional(readOnly = true)
     public List<User> getAllNonAdminUsers() {
-        return userRepository.findByAdminFalse();
+        return userRepository.findByType("user");
     }
 
     /**
@@ -142,8 +163,8 @@ public class UserService {
         user.setEmail(userDetails.getEmail());
         user.setPassword(userDetails.getPassword());
         
-        if (userDetails.getAdmin() != null) {
-            user.setAdmin(userDetails.getAdmin());
+        if (userDetails.getType() != null) {
+            user.setType(userDetails.getType());
         }
 
         validateUser(user);
@@ -196,15 +217,18 @@ public class UserService {
         user.setPassword(newPassword);
         return userRepository.save(user);
     }
-
     /**
-     * Cambiar estado de administrador
+     * Cambiar entre admin y user (toggle)
      */
     public User toggleAdminStatus(Long id) {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Usuario no encontrado con id: " + id));
 
-        user.setAdmin(!user.getAdmin());
+        if ("admin".equalsIgnoreCase(user.getType())) {
+            user.setType("user");
+        } else {
+            user.setType("admin");
+        }
         return userRepository.save(user);
     }
 
@@ -215,18 +239,18 @@ public class UserService {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Usuario no encontrado con id: " + id));
 
-        user.setAdmin(true);
+        user.setType("admin");
         return userRepository.save(user);
     }
 
     /**
-     * Remover como administrador
+     * Remover como administrador (dejar como 'user')
      */
     public User removeAsAdmin(Long id) {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Usuario no encontrado con id: " + id));
 
-        user.setAdmin(false);
+        user.setType("user");
         return userRepository.save(user);
     }
 
@@ -253,7 +277,7 @@ public class UserService {
      */
     @Transactional(readOnly = true)
     public long countAdminUsers() {
-        return userRepository.countByAdminTrue();
+        return userRepository.countByType("admin");
     }
 
     /**
@@ -261,7 +285,101 @@ public class UserService {
      */
     @Transactional(readOnly = true)
     public long countNonAdminUsers() {
-        return userRepository.countByAdminFalse();
+        return userRepository.countByType("user");
+    }
+
+    /**
+     * Recalculate available hours for a user based on classes, activities and tasks.
+     * Assumptions:
+     * - available hours per day = 24 - occupied hours
+     * - day keys use: SUN,MON,TUE,WED,THU,FRI,SAT
+     * - classes and activities have days strings like "0,1,1,0,1,0,0" and start_times/end_times lists
+     * - tasks use workingDate if present, otherwise dueDate; estimatedTime is in minutes
+     */
+    public void recalculateAvailableHours(User user) {
+        if (user == null || user.getId() == null) return;
+
+        Map<String, Integer> result = new HashMap<>();
+        String[] dayNames = new String[]{"SUN","MON","TUE","WED","THU","FRI","SAT"};
+        // occupied minutes per day
+        long[] occupiedMinutes = new long[7];
+
+        // Classes
+        List<Class> classes = classRepository.findByUserId(user.getId());
+        for (Class c : classes) {
+            if (c.getDays() == null || c.getStartTimes() == null || c.getEndTimes() == null) continue;
+            String[] days = c.getDays().split(",");
+            String[] starts = c.getStartTimes().split(",");
+            String[] ends = c.getEndTimes().split(",");
+            for (int i = 0; i < days.length && i < 7; i++) {
+                if (!"1".equals(days[i].trim())) continue;
+                String s = (i < starts.length) ? starts[i].trim() : (starts.length > 0 ? starts[0].trim() : null);
+                String e = (i < ends.length) ? ends[i].trim() : (ends.length > 0 ? ends[0].trim() : null);
+                if (s == null || e == null || s.isEmpty() || e.isEmpty()) continue;
+                try {
+                    LocalTime st = LocalTime.parse(s);
+                    LocalTime en = LocalTime.parse(e);
+                    long minutes = Duration.between(st, en).toMinutes();
+                    if (minutes < 0) minutes = 0;
+                    occupiedMinutes[i] += minutes;
+                } catch (Exception ex) {
+                    // ignore parse errors
+                }
+            }
+        }
+
+        // Activities
+        List<Activity> activities = activityRepository.findByUserId(user.getId());
+        for (Activity a : activities) {
+            if (a.getDays() == null || a.getStartTimes() == null || a.getEndTimes() == null) continue;
+            String[] days = a.getDays().split(",");
+            String[] starts = a.getStartTimes().split(",");
+            String[] ends = a.getEndTimes().split(",");
+            for (int i = 0; i < days.length && i < 7; i++) {
+                if (!"1".equals(days[i].trim())) continue;
+                String s = (i < starts.length) ? starts[i].trim() : (starts.length > 0 ? starts[0].trim() : null);
+                String e = (i < ends.length) ? ends[i].trim() : (ends.length > 0 ? ends[0].trim() : null);
+                if (s == null || e == null || s.isEmpty() || e.isEmpty()) continue;
+                try {
+                    LocalTime st = LocalTime.parse(s);
+                    LocalTime en = LocalTime.parse(e);
+                    long minutes = Duration.between(st, en).toMinutes();
+                    if (minutes < 0) minutes = 0;
+                    occupiedMinutes[i] += minutes;
+                } catch (Exception ex) {
+                    // ignore parse errors
+                }
+            }
+        }
+
+        // Tasks: use workingDate and startTime/endTime when available
+        List<Task> tasks = taskRepository.findByUserId(user.getId());
+        for (Task t : tasks) {
+            LocalDate d = t.getWorkingDate();
+            if (d == null) continue; // only consider tasks with a workingDate for scheduling
+            int idx = d.getDayOfWeek().getValue() % 7; // Sunday -> 0
+            try {
+                if (t.getStartTime() != null && t.getEndTime() != null) {
+                    long minutes = Duration.between(t.getStartTime(), t.getEndTime()).toMinutes();
+                    if (minutes > 0) occupiedMinutes[idx] += minutes;
+                } else {
+                    Integer est = t.getEstimatedTime();
+                    if (est != null && est > 0) occupiedMinutes[idx] += est;
+                }
+            } catch (Exception ex) {
+                // ignore
+            }
+        }
+
+        for (int i = 0; i < 7; i++) {
+            long freeMinutes = 24 * 60 - occupiedMinutes[i];
+            if (freeMinutes <= 0) continue; // only include days with free time
+            int freeHours = (int) (freeMinutes / 60); // floor hours
+            result.put(dayNames[i], freeHours);
+        }
+
+        user.setAvailableHours(result);
+        userRepository.save(user);
     }
 
     /**

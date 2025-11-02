@@ -27,16 +27,10 @@ public interface UserRepository extends JpaRepository<User, Long> {
     
     // Buscar usuarios por email (búsqueda parcial)
     List<User> findByEmailContainingIgnoreCase(String email);
-    
-    // Obtener todos los usuarios administradores
-    List<User> findByAdminTrue();
-    
-    // Obtener todos los usuarios no administradores
-    List<User> findByAdminFalse();
-    
-    // Contar usuarios administradores
-    long countByAdminTrue();
-    
-    // Contar usuarios no administradores
-    long countByAdminFalse();
+
+    // Obtener todos los usuarios por tipo
+    List<User> findByType(String type);
+
+    // Contar usuarios por tipo
+    long countByType(String type);
 }

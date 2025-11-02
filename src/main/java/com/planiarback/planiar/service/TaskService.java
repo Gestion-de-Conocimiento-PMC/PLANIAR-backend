@@ -17,10 +17,12 @@ public class TaskService {
 
     private final TaskRepository taskRepository;
     private final UserRepository userRepository;
+    private final UserService userService;
 
-    public TaskService(TaskRepository taskRepository, UserRepository userRepository) {
+    public TaskService(TaskRepository taskRepository, UserRepository userRepository, UserService userService) {
         this.taskRepository = taskRepository;
         this.userRepository = userRepository;
+        this.userService = userService;
     }
 
     /**
@@ -32,7 +34,10 @@ public class TaskService {
         
         task.setUser(user);
         validateTask(task);
-        return taskRepository.save(task);
+        Task saved = taskRepository.save(task);
+        // Recalculate user's available hours
+        userService.recalculateAvailableHours(user);
+        return saved;
     }
 
     /**
@@ -215,17 +220,20 @@ public class TaskService {
         task.setState(taskDetails.getState());
 
         validateTask(task);
-        return taskRepository.save(task);
+        Task saved = taskRepository.save(task);
+        userService.recalculateAvailableHours(task.getUser());
+        return saved;
     }
 
     /**
      * Eliminar una tarea
      */
     public void deleteTask(Long id) {
-        if (!taskRepository.existsById(id)) {
-            throw new IllegalArgumentException("Tarea no encontrada con id: " + id);
-        }
+        Task task = taskRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Tarea no encontrada con id: " + id));
+        User user = task.getUser();
         taskRepository.deleteById(id);
+        if (user != null) userService.recalculateAvailableHours(user);
     }
 
     /**
@@ -233,6 +241,7 @@ public class TaskService {
      */
     public void deleteAllUserTasks(Long userId) {
         taskRepository.deleteByUserId(userId);
+        userRepository.findById(userId).ifPresent(userService::recalculateAvailableHours);
     }
 
     /**
@@ -275,7 +284,9 @@ public class TaskService {
                 .orElseThrow(() -> new IllegalArgumentException("Tarea no encontrada con id: " + taskId));
 
         task.setClassId(classId);
-        return taskRepository.save(task);
+        Task saved = taskRepository.save(task);
+        userService.recalculateAvailableHours(task.getUser());
+        return saved;
     }
 
     /**
@@ -286,7 +297,9 @@ public class TaskService {
                 .orElseThrow(() -> new IllegalArgumentException("Tarea no encontrada con id: " + taskId));
 
         task.setClassId(null);
-        return taskRepository.save(task);
+        Task saved = taskRepository.save(task);
+        userService.recalculateAvailableHours(task.getUser());
+        return saved;
     }
 
     /**
@@ -297,7 +310,9 @@ public class TaskService {
                 .orElseThrow(() -> new IllegalArgumentException("Tarea no encontrada con id: " + taskId));
 
         task.setState(newState);
-        return taskRepository.save(task);
+        Task saved = taskRepository.save(task);
+        userService.recalculateAvailableHours(task.getUser());
+        return saved;
     }
 
     /**

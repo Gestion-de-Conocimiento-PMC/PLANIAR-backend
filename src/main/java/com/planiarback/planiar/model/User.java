@@ -8,6 +8,8 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
 
 @Entity
 @Table(name = "users")
@@ -29,8 +31,8 @@ public class User {
     @Column(nullable = false)
     private String password;
     
-    @Column(nullable = false)
-    private Boolean admin = false;
+    @Column(length = 20)
+    private String type = "user"; 
     
     @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, orphanRemoval = true)
     @JsonIgnore
@@ -43,6 +45,13 @@ public class User {
     @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, orphanRemoval = true)
     @JsonIgnore
     private List<Activity> activities = new ArrayList<>();
+
+    // Available hours per day (key: SUN,MON,TUE,WED,THU,FRI,SAT), value: available hours (integer)
+    @ElementCollection
+    @CollectionTable(name = "user_available_hours", joinColumns = @JoinColumn(name = "user_id"))
+    @MapKeyColumn(name = "day")
+    @Column(name = "hours")
+    private Map<String, Integer> availableHours = new HashMap<>();
 
     /**
      * @return Long return the id
@@ -101,17 +110,17 @@ public class User {
     }
 
     /**
-     * @return Boolean return the admin
+     * @return String return the type (user/admin)
      */
-    public Boolean getAdmin() {
-        return admin;
+    public String getType() {
+        return type;
     }
 
     /**
-     * @param admin the admin to set
+     * @param type the type to set
      */
-    public void setAdmin(Boolean admin) {
-        this.admin = admin;
+    public void setType(String type) {
+        this.type = type;
     }
 
     /**
@@ -154,6 +163,20 @@ public class User {
      */
     public void setActivities(List<Activity> activities) {
         this.activities = activities;
+    }
+
+    /**
+     * @return Map<String,Integer> available hours per day
+     */
+    public Map<String, Integer> getAvailableHours() {
+        return availableHours;
+    }
+
+    /**
+     * @param availableHours the availableHours map to set
+     */
+    public void setAvailableHours(Map<String, Integer> availableHours) {
+        this.availableHours = availableHours;
     }
 
 }

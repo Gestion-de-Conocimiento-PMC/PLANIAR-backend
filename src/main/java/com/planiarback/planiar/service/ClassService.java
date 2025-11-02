@@ -20,10 +20,12 @@ public class ClassService {
 
     private final ClassRepository classRepository;
     private final UserRepository userRepository;
+    private final UserService userService;
 
-    public ClassService(ClassRepository classRepository, UserRepository userRepository) {
+    public ClassService(ClassRepository classRepository, UserRepository userRepository, UserService userService) {
         this.classRepository = classRepository;
         this.userRepository = userRepository;
+        this.userService = userService;
     }
 
     /**
@@ -35,7 +37,9 @@ public class ClassService {
         
         classEntity.setUser(user);
         validateClass(classEntity);
-        return classRepository.save(classEntity);
+        Class saved = classRepository.save(classEntity);
+        userService.recalculateAvailableHours(user);
+        return saved;
     }
 
     /**
@@ -217,17 +221,20 @@ public class ClassService {
         classEntity.setColor(classDetails.getColor());
 
         validateClass(classEntity);
-        return classRepository.save(classEntity);
+        Class saved = classRepository.save(classEntity);
+        userService.recalculateAvailableHours(classEntity.getUser());
+        return saved;
     }
 
     /**
      * Eliminar una clase
      */
     public void deleteClass(Long id) {
-        if (!classRepository.existsById(id)) {
-            throw new IllegalArgumentException("Clase no encontrada con id: " + id);
-        }
+        Class classEntity = classRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Clase no encontrada con id: " + id));
+        User user = classEntity.getUser();
         classRepository.deleteById(id);
+        if (user != null) userService.recalculateAvailableHours(user);
     }
 
     /**
@@ -235,6 +242,7 @@ public class ClassService {
      */
     public void deleteAllUserClasses(Long userId) {
         classRepository.deleteByUserId(userId);
+        userRepository.findById(userId).ifPresent(userService::recalculateAvailableHours);
     }
 
     /**
