@@ -60,7 +60,7 @@ public class TaskController {
      */
     @GetMapping("/user/{userId}/ordered-by-date")
     public ResponseEntity<List<Task>> getTasksOrderedByDate(@PathVariable Long userId) {
-        List<Task> tasks = taskService.getTasksOrderedByDate(userId);
+        List<Task> tasks = taskService.getTasksOrderedByDueDate(userId);
         return ResponseEntity.ok(tasks);
     }
 
@@ -158,14 +158,14 @@ public class TaskController {
 
     /**
      * Obtener tareas de una fecha específica
-     * GET /api/tasks/user/{userId}/date/{date}
+     * GET /api/tasks/user/{userId}/due-date/{dueDate}
      */
-    @GetMapping("/user/{userId}/date/{date}")
-    public ResponseEntity<List<Task>> getTasksByDate(
+    @GetMapping("/user/{userId}/due-date/{dueDate}")
+    public ResponseEntity<List<Task>> getTasksByDueDate(
             @PathVariable Long userId,
-            @PathVariable String date) {
-        LocalDate parsedDate = LocalDate.parse(date);
-        List<Task> tasks = taskService.getTasksByDate(userId, parsedDate);
+            @PathVariable String dueDate) {
+        LocalDate parsedDate = LocalDate.parse(dueDate);
+        List<Task> tasks = taskService.getTasksByDueDate(userId, parsedDate);
         return ResponseEntity.ok(tasks);
     }
 
@@ -228,9 +228,9 @@ public class TaskController {
      * Obtener tareas sin fecha
      * GET /api/tasks/user/{userId}/without-date
      */
-    @GetMapping("/user/{userId}/without-date")
-    public ResponseEntity<List<Task>> getTasksWithoutDate(@PathVariable Long userId) {
-        List<Task> tasks = taskService.getTasksWithoutDate(userId);
+    @GetMapping("/user/{userId}/without-due-date")
+    public ResponseEntity<List<Task>> getTasksWithoutDueDate(@PathVariable Long userId) {
+        List<Task> tasks = taskService.getTasksWithoutDueDate(userId);
         return ResponseEntity.ok(tasks);
     }
 

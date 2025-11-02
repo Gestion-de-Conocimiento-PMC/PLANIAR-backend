@@ -55,8 +55,8 @@ public class TaskService {
      * Obtener tareas ordenadas por fecha
      */
     @Transactional(readOnly = true)
-    public List<Task> getTasksOrderedByDate(Long userId) {
-        return taskRepository.findByUserIdOrderByDateAsc(userId);
+    public List<Task> getTasksOrderedByDueDate(Long userId) {
+        return taskRepository.findByUserIdOrderByDueDateAsc(userId);
     }
 
     /**
@@ -127,8 +127,8 @@ public class TaskService {
      * Obtener tareas de una fecha específica
      */
     @Transactional(readOnly = true)
-    public List<Task> getTasksByDate(Long userId, LocalDate date) {
-        return taskRepository.findByUserIdAndDate(userId, date);
+    public List<Task> getTasksByDueDate(Long userId, LocalDate dueDate) {
+        return taskRepository.findByUserIdAndDueDate(userId, dueDate);
     }
 
     /**
@@ -136,7 +136,7 @@ public class TaskService {
      */
     @Transactional(readOnly = true)
     public List<Task> getTasksInRange(Long userId, LocalDate startDate, LocalDate endDate) {
-        return taskRepository.findByUserIdAndDateBetween(userId, startDate, endDate);
+        return taskRepository.findByUserIdAndDueDateBetween(userId, startDate, endDate);
     }
 
     /**
@@ -144,7 +144,7 @@ public class TaskService {
      */
     @Transactional(readOnly = true)
     public List<Task> getOverdueTasks(Long userId) {
-        return taskRepository.findByUserIdAndDateBefore(userId, LocalDate.now());
+        return taskRepository.findByUserIdAndDueDateBefore(userId, LocalDate.now());
     }
 
     /**
@@ -152,7 +152,7 @@ public class TaskService {
      */
     @Transactional(readOnly = true)
     public List<Task> getFutureTasks(Long userId) {
-        return taskRepository.findByUserIdAndDateAfterOrderByDateAsc(userId, LocalDate.now());
+        return taskRepository.findByUserIdAndDueDateAfterOrderByDueDateAsc(userId, LocalDate.now());
     }
 
     /**
@@ -172,11 +172,11 @@ public class TaskService {
     }
 
     /**
-     * Obtener tareas sin fecha
+     * Obtener tareas sin dueDate
      */
     @Transactional(readOnly = true)
-    public List<Task> getTasksWithoutDate(Long userId) {
-        return taskRepository.findByUserIdAndDateIsNull(userId);
+    public List<Task> getTasksWithoutDueDate(Long userId) {
+        return taskRepository.findByUserIdAndDueDateIsNull(userId);
     }
 
     /**
@@ -204,7 +204,10 @@ public class TaskService {
 
         task.setTitle(taskDetails.getTitle());
         task.setClassId(taskDetails.getClassId());
-        task.setDate(taskDetails.getDate());
+        task.setDueDate(taskDetails.getDueDate());
+        task.setWorkingDate(taskDetails.getWorkingDate());
+        task.setStartTime(taskDetails.getStartTime());
+        task.setEndTime(taskDetails.getEndTime());
         task.setPriority(taskDetails.getPriority());
         task.setEstimatedTime(taskDetails.getEstimatedTime());
         task.setDescription(taskDetails.getDescription());

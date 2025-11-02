@@ -6,6 +6,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDate;
+import java.time.LocalTime;
 
 import com.fasterxml.jackson.annotation.JsonBackReference;
 
@@ -26,8 +27,17 @@ public class Task {
     @Column(name = "class_id")
     private Long classId;
     
-    @Column(name = "date")
-    private LocalDate date;
+    @Column(name = "due_date")
+    private LocalDate dueDate;
+
+    @Column(name = "working_date")
+    private LocalDate workingDate;
+
+    @Column(name = "start_time")
+    private LocalTime startTime;
+
+    @Column(name = "end_time")
+    private LocalTime endTime;
     
     @Column(length = 50)
     private String priority; // High, Medium, Low
@@ -94,15 +104,57 @@ public class Task {
     /**
      * @return LocalDate return the date
      */
-    public LocalDate getDate() {
-        return date;
+    public LocalDate getDueDate() {
+        return dueDate;
     }
 
     /**
-     * @param date the date to set
+     * @param dueDate the dueDate to set
      */
-    public void setDate(LocalDate date) {
-        this.date = date;
+    public void setDueDate(LocalDate dueDate) {
+        this.dueDate = dueDate;
+    }
+
+    /**
+     * @return LocalDate return the workingDate
+     */
+    public LocalDate getWorkingDate() {
+        return workingDate;
+    }
+
+    /**
+     * @param workingDate the workingDate to set
+     */
+    public void setWorkingDate(LocalDate workingDate) {
+        this.workingDate = workingDate;
+    }
+
+    /**
+     * @return LocalTime return the startTime
+     */
+    public LocalTime getStartTime() {
+        return startTime;
+    }
+
+    /**
+     * @param startTime the startTime to set
+     */
+    public void setStartTime(LocalTime startTime) {
+        this.startTime = startTime;
+    }
+
+    /**
+     * @return LocalTime return the endTime
+     */
+    public LocalTime getEndTime() {
+        return endTime;
+    }
+
+    /**
+     * @param endTime the endTime to set
+     */
+    public void setEndTime(LocalTime endTime) {
+        this.endTime = endTime;
     }
     
     /**

@@ -24,7 +24,7 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
     boolean existsByUserIdAndTitle(Long userId, String title);
     
     // Buscar tareas ordenadas por fecha
-    List<Task> findByUserIdOrderByDateAsc(Long userId);
+    List<Task> findByUserIdOrderByDueDateAsc(Long userId);
     
     // Buscar tareas ordenadas por prioridad
     List<Task> findByUserIdOrderByPriorityAsc(Long userId);
@@ -44,17 +44,17 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
     // Buscar tareas de un usuario por tipo
     List<Task> findByUserIdAndType(Long userId, String type);
     
-    // Buscar tareas de una fecha específica
-    List<Task> findByUserIdAndDate(Long userId, LocalDate date);
+    // Buscar tareas de una fecha específica (due date)
+    List<Task> findByUserIdAndDueDate(Long userId, LocalDate dueDate);
     
-    // Buscar tareas en un rango de fechas
-    List<Task> findByUserIdAndDateBetween(Long userId, LocalDate startDate, LocalDate endDate);
+    // Buscar tareas en un rango de due dates
+    List<Task> findByUserIdAndDueDateBetween(Long userId, LocalDate startDate, LocalDate endDate);
     
-    // Buscar tareas vencidas (con fecha anterior a hoy)
-    List<Task> findByUserIdAndDateBefore(Long userId, LocalDate currentDate);
+    // Buscar tareas vencidas (con dueDate anterior a hoy)
+    List<Task> findByUserIdAndDueDateBefore(Long userId, LocalDate currentDate);
     
     // Buscar tareas futuras
-    List<Task> findByUserIdAndDateAfterOrderByDateAsc(Long userId, LocalDate currentDate);
+    List<Task> findByUserIdAndDueDateAfterOrderByDueDateAsc(Long userId, LocalDate currentDate);
     
     // Buscar tareas sin clase asignada
     List<Task> findByUserIdAndClassIdIsNull(Long userId);
@@ -62,8 +62,8 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
     // Buscar tareas con clase asignada
     List<Task> findByUserIdAndClassIdIsNotNull(Long userId);
     
-    // Buscar tareas sin fecha
-    List<Task> findByUserIdAndDateIsNull(Long userId);
+    // Buscar tareas sin dueDate
+    List<Task> findByUserIdAndDueDateIsNull(Long userId);
     
     // Buscar tareas sin descripción
     List<Task> findByUserIdAndDescriptionIsNull(Long userId);
