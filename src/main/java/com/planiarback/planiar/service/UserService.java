@@ -378,6 +378,13 @@ public class UserService {
             result.put(dayNames[i], freeHours);
         }
 
+        // If user has no schedule entries, default to all days 24 hours
+        if (result.isEmpty()) {
+            for (String dName : dayNames) {
+                result.put(dName, 24);
+            }
+        }
+
         user.setAvailableHours(result);
         userRepository.save(user);
     }
@@ -398,7 +405,14 @@ public class UserService {
         Optional<User> user = userRepository.findByUsername(username);
 
         if (user.isPresent() && user.get().getPassword().equals(password)) {
-            return user;
+            // ensure availableHours is initialized (default 24h for each day when empty)
+            User u = user.get();
+            if (u.getAvailableHours() == null || u.getAvailableHours().isEmpty()) {
+                // recalculate will set defaults when there are no schedule entries
+                // call outside read-only context (save will be performed inside recalc)
+                recalculateAvailableHours(u);
+            }
+            return Optional.of(u);
         }
 
         return Optional.empty();

@@ -49,7 +49,8 @@ public class User {
     // Available hours per day (key: SUN,MON,TUE,WED,THU,FRI,SAT), value: available hours (integer)
     @ElementCollection
     @CollectionTable(name = "user_available_hours", joinColumns = @JoinColumn(name = "user_id"))
-    @MapKeyColumn(name = "day")
+    // avoid reserved keywords like 'day' in SQL engines by using a safe column name
+    @MapKeyColumn(name = "day_name")
     @Column(name = "hours")
     private Map<String, Integer> availableHours = new HashMap<>();
 
