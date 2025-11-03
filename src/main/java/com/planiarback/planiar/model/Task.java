@@ -34,6 +34,15 @@ public class Task {
     @Column(name = "due_time")
     private LocalTime dueTime;
 
+    @Column(name = "parent_id")
+    private Long parentId;
+
+    @Column(name = "segment_index")
+    private Integer segmentIndex;
+
+    @Column(name = "total_segments")
+    private Integer totalSegments;
+
     @Column(name = "working_date")
     private LocalDate workingDate;
 
@@ -131,6 +140,48 @@ public class Task {
      */
     public void setDueTime(LocalTime dueTime) {
         this.dueTime = dueTime;
+    }
+
+    /**
+     * @return Long return the parentId
+     */
+    public Long getParentId() {
+        return parentId;
+    }
+
+    /**
+     * @param parentId the parentId to set
+     */
+    public void setParentId(Long parentId) {
+        this.parentId = parentId;
+    }
+
+    /**
+     * @return Integer return the segmentIndex
+     */
+    public Integer getSegmentIndex() {
+        return segmentIndex;
+    }
+
+    /**
+     * @param segmentIndex the segmentIndex to set
+     */
+    public void setSegmentIndex(Integer segmentIndex) {
+        this.segmentIndex = segmentIndex;
+    }
+
+    /**
+     * @return Integer return the totalSegments
+     */
+    public Integer getTotalSegments() {
+        return totalSegments;
+    }
+
+    /**
+     * @param totalSegments the totalSegments to set
+     */
+    public void setTotalSegments(Integer totalSegments) {
+        this.totalSegments = totalSegments;
     }
 
     /**

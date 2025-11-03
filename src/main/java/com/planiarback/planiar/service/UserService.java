@@ -306,8 +306,8 @@ public class UserService {
 
     Map<String, java.util.List<String>> result = new HashMap<>();
         String[] dayNames = new String[]{"SUN","MON","TUE","WED","THU","FRI","SAT"};
-    // occupied intervals per day -> mark occupied hourly slots
-    boolean[][] occupied = new boolean[7][24];
+    // occupied intervals per day -> mark occupied 30-minute slots (48 per day)
+    boolean[][] occupied = new boolean[7][48];
 
         // Classes
         List<Class> classes = classRepository.findByUserId(user.getId());
@@ -325,11 +325,11 @@ public class UserService {
                     LocalTime st = LocalTime.parse(s);
                     LocalTime en = LocalTime.parse(e);
                     // mark hourly slots overlapped by this interval
-                    for (int h = 0; h < 24; h++) {
-                        LocalTime slotStart = LocalTime.of(h, 0);
-                        LocalTime slotEnd = slotStart.plusHours(1);
+                    for (int slot = 0; slot < 48; slot++) {
+                        LocalTime slotStart = LocalTime.of(slot/2, (slot%2)*30);
+                        LocalTime slotEnd = slotStart.plusMinutes(30);
                         if (st.isBefore(slotEnd) && en.isAfter(slotStart)) {
-                            occupied[i][h] = true;
+                            occupied[i][slot] = true;
                         }
                     }
                 } catch (Exception ex) {
@@ -353,11 +353,11 @@ public class UserService {
                 try {
                     LocalTime st = LocalTime.parse(s);
                     LocalTime en = LocalTime.parse(e);
-                    for (int h = 0; h < 24; h++) {
-                        LocalTime slotStart = LocalTime.of(h, 0);
-                        LocalTime slotEnd = slotStart.plusHours(1);
+                    for (int slot = 0; slot < 48; slot++) {
+                        LocalTime slotStart = LocalTime.of(slot/2, (slot%2)*30);
+                        LocalTime slotEnd = slotStart.plusMinutes(30);
                         if (st.isBefore(slotEnd) && en.isAfter(slotStart)) {
-                            occupied[i][h] = true;
+                            occupied[i][slot] = true;
                         }
                     }
                 } catch (Exception ex) {
@@ -376,11 +376,11 @@ public class UserService {
                 if (t.getStartTime() != null && t.getEndTime() != null) {
                     LocalTime st = t.getStartTime();
                     LocalTime en = t.getEndTime();
-                    for (int h = 0; h < 24; h++) {
-                        LocalTime slotStart = LocalTime.of(h, 0);
-                        LocalTime slotEnd = slotStart.plusHours(1);
+                    for (int s = 0; s < 48; s++) {
+                        LocalTime slotStart = LocalTime.of(s/2, (s%2)*30);
+                        LocalTime slotEnd = slotStart.plusMinutes(30);
                         if (st.isBefore(slotEnd) && en.isAfter(slotStart)) {
-                            occupied[idx][h] = true;
+                            occupied[idx][s] = true;
                         }
                     }
                 }
@@ -391,10 +391,13 @@ public class UserService {
         // Build free hourly slots per day as List<String>
         for (int i = 0; i < 7; i++) {
             java.util.List<String> slots = new java.util.ArrayList<>();
-            for (int h = 0; h < 24; h++) {
-                if (!occupied[i][h]) {
-                    int end = (h + 1) % 24;
-                    slots.add(String.format("%02d:00-%02d:00", h, end));
+            for (int s = 0; s < 48; s++) {
+                if (!occupied[i][s]) {
+                    int hour = s/2;
+                    int minute = (s%2)*30;
+                    LocalTime slotStart = LocalTime.of(hour, minute);
+                    LocalTime slotEnd = slotStart.plusMinutes(30);
+                    slots.add(String.format("%02d:%02d-%02d:%02d", slotStart.getHour(), slotStart.getMinute(), slotEnd.getHour(), slotEnd.getMinute()));
                 }
             }
             if (!slots.isEmpty()) {
@@ -405,9 +408,12 @@ public class UserService {
         // If user has no schedule entries (result empty), default to all days full-day slots
         if (result.isEmpty()) {
             java.util.List<String> all = new java.util.ArrayList<>();
-            for (int h = 0; h < 24; h++) {
-                int end = (h + 1) % 24;
-                all.add(String.format("%02d:00-%02d:00", h, end));
+            for (int s = 0; s < 48; s++) {
+                int hour = s/2;
+                int minute = (s%2)*30;
+                LocalTime slotStart = LocalTime.of(hour, minute);
+                LocalTime slotEnd = slotStart.plusMinutes(30);
+                all.add(String.format("%02d:%02d-%02d:%02d", slotStart.getHour(), slotStart.getMinute(), slotEnd.getHour(), slotEnd.getMinute()));
             }
             for (String dName : dayNames) {
                 result.put(dName, new java.util.ArrayList<>(all));
