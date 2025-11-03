@@ -14,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Duration;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.HashMap;
 import java.util.List;
@@ -55,6 +56,10 @@ public class UserService {
         
         if (user.getType() == null || user.getType().trim().isEmpty()) {
             user.setType("user");
+        }
+        // set registration date if not provided
+        if (user.getRegistrationDate() == null) {
+            user.setRegistrationDate(LocalDateTime.now());
         }
         
         return userRepository.save(user);

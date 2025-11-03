@@ -7,6 +7,7 @@ import lombok.NoArgsConstructor;
 
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.time.LocalDateTime;
 
 import com.fasterxml.jackson.annotation.JsonBackReference;
 
@@ -29,6 +30,9 @@ public class Task {
     
     @Column(name = "due_date")
     private LocalDate dueDate;
+
+    @Column(name = "due_time")
+    private LocalTime dueTime;
 
     @Column(name = "working_date")
     private LocalDate workingDate;
@@ -113,6 +117,20 @@ public class Task {
      */
     public void setDueDate(LocalDate dueDate) {
         this.dueDate = dueDate;
+    }
+
+    /**
+     * @return LocalTime return the dueTime
+     */
+    public LocalTime getDueTime() {
+        return dueTime;
+    }
+
+    /**
+     * @param dueTime the dueTime to set
+     */
+    public void setDueTime(LocalTime dueTime) {
+        this.dueTime = dueTime;
     }
 
     /**

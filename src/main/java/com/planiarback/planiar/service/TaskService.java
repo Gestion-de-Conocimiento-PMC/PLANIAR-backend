@@ -8,6 +8,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.temporal.ChronoUnit;
+import java.util.Map;
 import java.util.List;
 import java.util.Optional;
 
@@ -34,10 +37,119 @@ public class TaskService {
         
         task.setUser(user);
         validateTask(task);
+        // Ensure user's availability is up to date
+        userService.recalculateAvailableHours(user);
+
+        // If task has no workingDate/startTime/endTime, try to schedule it automatically
+        if (task.getWorkingDate() == null && task.getStartTime() == null && task.getEndTime() == null) {
+            try {
+                boolean scheduled = tryAutoScheduleTask(task, user);
+                if (!scheduled) {
+                    // fallback: schedule as late as possible before due (respecting working hours 08:00-22:00)
+                    if (task.getDueDate() != null) {
+                        LocalDate d = task.getDueDate();
+                        LocalTime dueT = task.getDueTime() != null ? task.getDueTime() : LocalTime.of(23, 59);
+                        long minutes = task.getEstimatedTime();
+                        if (minutes > 0) {
+                            LocalTime latestEnd = dueT;
+                            if (latestEnd.isAfter(LocalTime.of(22,0))) latestEnd = LocalTime.of(22,0);
+                            LocalTime candidateStart = latestEnd.minusMinutes(minutes);
+                            if (candidateStart.isBefore(LocalTime.of(8,0))) candidateStart = LocalTime.of(8,0);
+                            task.setWorkingDate(d);
+                            task.setStartTime(candidateStart);
+                            task.setEndTime(candidateStart.plusMinutes(minutes));
+                        }
+                    }
+                }
+            } catch (Exception ex) {
+                // scheduling failed, proceed without schedule
+            }
+        }
+
         Task saved = taskRepository.save(task);
-        // Recalculate user's available hours
+        // Recalculate user's available hours after save
         userService.recalculateAvailableHours(user);
         return saved;
+    }
+
+    /**
+     * Try to automatically schedule a task using user's availableHours and estimatedTime.
+     * Returns true if scheduled.
+     */
+    private boolean tryAutoScheduleTask(Task task, User user) {
+        if (task.getEstimatedTime() <= 0) return false;
+        if (task.getDueDate() == null) return false;
+
+        Map<String, java.util.List<String>> avail = user.getAvailableHours();
+        if (avail == null) return false;
+
+        long needed = task.getEstimatedTime(); // minutes
+
+        LocalDate deadline = task.getDueDate();
+        LocalTime deadlineTime = task.getDueTime() != null ? task.getDueTime() : LocalTime.of(23,59);
+
+        LocalDate today = LocalDate.now();
+        // search from deadline backwards to today (limit to 30 days back to avoid long loops)
+        int maxBack = 30;
+        for (int offset = 0; offset <= maxBack; offset++) {
+            LocalDate d = deadline.minusDays(offset);
+            if (d.isBefore(today)) break;
+            String dayKey = dayNameFor(d.getDayOfWeek().getValue() % 7);
+            java.util.List<String> freeSlots = avail.get(dayKey);
+            if (freeSlots == null || freeSlots.isEmpty()) continue;
+
+            // iterate free slots and try to fit needed minutes within a single slot
+            // choose latest possible slot that finishes before deadline
+            for (int i = freeSlots.size() - 1; i >= 0; i--) {
+                String slot = freeSlots.get(i); // format "HH:00-HH:00"
+                String[] parts = slot.split("-");
+                if (parts.length != 2) continue;
+                LocalTime slotStart = LocalTime.parse(parts[0]);
+                LocalTime slotEnd = LocalTime.parse(parts[1]);
+
+                // if this day is the deadline day, ensure end <= deadlineTime
+                LocalTime effectiveSlotEnd = slotEnd;
+                if (d.equals(deadline) && effectiveSlotEnd.isAfter(deadlineTime)) {
+                    effectiveSlotEnd = deadlineTime;
+                }
+
+                long slotMinutes = ChronoUnit.MINUTES.between(slotStart, effectiveSlotEnd);
+                if (slotMinutes <= 0) continue;
+
+                if (slotMinutes >= needed) {
+                    // schedule within this slot as late as possible
+                    LocalTime start = effectiveSlotEnd.minusMinutes(needed);
+                    if (start.isBefore(slotStart)) start = slotStart;
+                    // respect working hours 08:00-22:00
+                    if (start.isBefore(LocalTime.of(8,0))) start = LocalTime.of(8,0);
+                    LocalTime end = start.plusMinutes(needed);
+                    if (end.isAfter(LocalTime.of(22,0))) {
+                        // cannot fit in this slot due to working hours
+                        continue;
+                    }
+
+                    task.setWorkingDate(d);
+                    task.setStartTime(start);
+                    task.setEndTime(end);
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private String dayNameFor(int idx) {
+        // idx: 0=Sunday .. 6=Saturday
+        switch (idx) {
+            case 0: return "SUN";
+            case 1: return "MON";
+            case 2: return "TUE";
+            case 3: return "WED";
+            case 4: return "THU";
+            case 5: return "FRI";
+            default: return "SAT";
+        }
     }
 
     /**

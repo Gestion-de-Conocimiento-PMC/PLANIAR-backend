@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
+import java.time.LocalDateTime;
 import jakarta.persistence.Convert;
 import com.planiarback.planiar.util.MapJsonConverter;
 
@@ -54,6 +55,10 @@ public class User {
     @Column(name = "available_hours", columnDefinition = "TEXT")
     @Convert(converter = MapJsonConverter.class)
     private Map<String, java.util.List<String>> availableHours = new HashMap<>();
+
+    // Registration date/time for the user
+    @Column(name = "registration_date")
+    private LocalDateTime registrationDate;
 
     /**
      * @return Long return the id
@@ -179,6 +184,20 @@ public class User {
      */
     public void setAvailableHours(Map<String, java.util.List<String>> availableHours) {
         this.availableHours = availableHours;
+    }
+
+    /**
+     * @return LocalDateTime return the registrationDate
+     */
+    public LocalDateTime getRegistrationDate() {
+        return registrationDate;
+    }
+
+    /**
+     * @param registrationDate the registrationDate to set
+     */
+    public void setRegistrationDate(LocalDateTime registrationDate) {
+        this.registrationDate = registrationDate;
     }
 
 }
