@@ -31,3 +31,7 @@ build/
 
 ### VS Code ###
 .vscode/
+
+# Local environment file (contains secrets) — keep out of source control
+.env.local
+.env
