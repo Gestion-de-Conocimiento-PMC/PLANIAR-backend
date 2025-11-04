@@ -40,8 +40,15 @@ public class TaskService {
         // Ensure user's availability is up to date
         userService.recalculateAvailableHours(user);
 
-        // If task has no workingDate/startTime/endTime, try to schedule it automatically
+        // If task has no workingDate/startTime/endTime, try a quick forced assignment on dueDate
+        // to avoid long scheduling work on rate-limited servers, then run the scheduler.
         if (task.getWorkingDate() == null && task.getStartTime() == null && task.getEndTime() == null) {
+            try {
+                quickAssignDueDate(task, user);
+            } catch (Exception ex) {
+                // quick assign failed - continue to full scheduler
+            }
+
             try {
                 tryAutoScheduleTask(task, user);
             } catch (Exception ex) {
@@ -490,6 +497,88 @@ public class TaskService {
             }
         }
         return out;
+    }
+
+    /**
+     * Quick forced assignment: try to set workingDate/startTime/endTime on the task to a block
+     * on the dueDate that fits (or partially fits) the estimatedTime ending before dueTime.
+     * This is a light-weight, fast fallback to avoid long scheduling work on rate-limited servers.
+     */
+    private boolean quickAssignDueDate(Task task, User user) {
+        if (task.getDueDate() == null) return false;
+        if (task.getEstimatedTime() == null || task.getEstimatedTime() <= 0) return false;
+
+        Map<String, java.util.List<String>> avail = user.getAvailableHours();
+        if (avail == null) return false;
+
+        int neededSlots = (int) Math.ceil(task.getEstimatedTime() / 30.0);
+        LocalDate d = task.getDueDate();
+        LocalTime deadlineTime = task.getDueTime() != null ? task.getDueTime() : LocalTime.of(23, 59);
+
+        // build occupied slots for user
+        java.util.Set<String> occupied = new java.util.HashSet<>();
+        List<Task> existing = taskRepository.findByUserId(user.getId());
+        for (Task t : existing) {
+            if (t.getWorkingDate() == null || t.getStartTime() == null || t.getEndTime() == null) continue;
+            LocalDate td = t.getWorkingDate();
+            LocalTime cur = t.getStartTime();
+            while (cur.isBefore(t.getEndTime())) {
+                occupied.add(td.toString() + "#" + cur.toString());
+                cur = cur.plusMinutes(30);
+            }
+        }
+
+        String dayKey = dayNameFor(d.getDayOfWeek().getValue() % 7);
+        java.util.List<String> freeSlots = avail.get(dayKey);
+        if (freeSlots == null) return false;
+
+        // collect available 30-min slots for dueDate excluding occupied and trimming by dueTime
+        java.util.List<Slot> dayCandidates = new java.util.ArrayList<>();
+        for (String slot : freeSlots) {
+            String[] parts = slot.split("-");
+            if (parts.length != 2) continue;
+            try {
+                LocalTime s = LocalTime.parse(parts[0]);
+                LocalTime e = LocalTime.parse(parts[1]);
+                if (e.isAfter(deadlineTime)) e = deadlineTime;
+                if (!s.isBefore(e)) continue;
+                LocalTime cur = s;
+                while (cur.plusMinutes(30).isBefore(e) || cur.plusMinutes(30).equals(e)) {
+                    String key = d.toString() + "#" + cur.toString();
+                    if (!occupied.contains(key)) dayCandidates.add(new Slot(d, cur, cur.plusMinutes(30)));
+                    cur = cur.plusMinutes(30);
+                }
+            } catch (Exception ex) { }
+        }
+
+        if (dayCandidates.isEmpty()) return false;
+
+        // find contiguous blocks and pick the one that ends latest
+        List<Block> dayBlocks = findContiguousBlocks(dayCandidates, neededSlots);
+        if (!dayBlocks.isEmpty()) {
+            Block best = dayBlocks.stream()
+                    .max(java.util.Comparator.comparing(b -> b.slots.get(b.slots.size() - 1).end))
+                    .orElse(dayBlocks.get(0));
+
+            // if block covers neededSlots, assign last neededSlots of block
+            if (best.slots.size() >= neededSlots) {
+                int startIndex = Math.max(0, best.slots.size() - neededSlots);
+                List<Slot> chosen = best.slots.subList(startIndex, startIndex + neededSlots);
+                task.setWorkingDate(d);
+                task.setStartTime(chosen.get(0).start);
+                task.setEndTime(chosen.get(chosen.size() - 1).end);
+                return true;
+            }
+
+            // otherwise assign the entire best block (partial fit) to at least set the fields
+            List<Slot> chosen = best.slots;
+            task.setWorkingDate(d);
+            task.setStartTime(chosen.get(0).start);
+            task.setEndTime(chosen.get(chosen.size() - 1).end);
+            return true;
+        }
+
+        return false;
     }
 
     /**
