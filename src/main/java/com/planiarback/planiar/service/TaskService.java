@@ -6,6 +6,8 @@ import com.planiarback.planiar.repository.TaskRepository;
 import com.planiarback.planiar.repository.UserRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -20,6 +22,7 @@ import java.util.Optional;
 @Service
 @Transactional
 public class TaskService {
+    private static final Logger logger = LoggerFactory.getLogger(TaskService.class);
 
     private final TaskRepository taskRepository;
     private final UserRepository userRepository;
@@ -37,201 +40,104 @@ public class TaskService {
      * Crear una nueva tarea
      */
     public Task createTask(Task task, Long userId) {
+        // Simplified, memory-light create flow for low-memory deployment
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new IllegalArgumentException("Usuario no encontrado con id: " + userId));
-        
+
         task.setUser(user);
         validateTask(task);
         // Ensure user's availability is up to date
         userService.recalculateAvailableHours(user);
 
-        // If task has no workingDate/startTime/endTime, try a quick forced assignment on dueDate
-        // to avoid long scheduling work on rate-limited servers, then run the scheduler.
+        // If the task has no explicit schedule, do a quick lightweight assignment and then
+        // rely on the AI planner to fully reorganize (avoid heavy local scheduling).
         if (task.getWorkingDate() == null && task.getStartTime() == null && task.getEndTime() == null) {
             try {
                 quickAssignDueDate(task, user);
             } catch (Exception ex) {
-                // quick assign failed - continue to full scheduler
-            }
-
-            try {
-                tryAutoScheduleTask(task, user);
-            } catch (Exception ex) {
-                // scheduling failed, proceed without schedule
+                logger.warn("quickAssignDueDate failed for user {}: {}", userId, ex.getMessage());
             }
         }
 
-            // If still not assigned, invoke AI planner to reorganize user's tasks (including this one)
-            if (task.getWorkingDate() == null && task.getStartTime() == null && task.getEndTime() == null) {
+        // Save the (possibly minimally assigned) task quickly to avoid keeping big in-memory structures
+        Task savedParent = safeSave(task);
+
+        // Invoke AI planner to produce a global plan for the user's tasks (including the new one)
+        try {
+            List<Task> all = safeFindByUserId(user.getId());
+            // ensure the saved parent is present in the list
+            boolean containsParent = all.stream().anyMatch(t -> t.getId() != null && t.getId().equals(savedParent.getId()));
+            if (!containsParent) all.add(savedParent);
+
+            List<Task> planned = aiPlannerService.planTasks(all, user.getAvailableHours());
+
+            // Persist the planner output: update existing tasks when possible, or create new ones.
+            for (Task p : planned) {
                 try {
-                    List<Task> all = taskRepository.findByUserId(user.getId());
-                    all.add(task);
-                    List<Task> planned = aiPlannerService.planTasks(all, user.getAvailableHours());
-                    List<Task> saved = new java.util.ArrayList<>();
-                    for (Task p : planned) {
-                        if (p.getUser() == null) p.setUser(user);
-                        saved.add(taskRepository.save(p));
-                    }
-                    // try to find the saved version of our new task
-                    for (Task s : saved) {
-                        if (s.getTitle() != null && s.getTitle().equals(task.getTitle())
-                                && Objects.equals(s.getDueDate(), task.getDueDate())
-                                && Objects.equals(s.getEstimatedTime(), task.getEstimatedTime())) {
-                            userService.recalculateAvailableHours(user);
-                            return s;
+                    if (p.getUser() == null) p.setUser(user);
+
+                    if (p.getId() != null && taskRepository.existsById(p.getId())) {
+                        // update existing by id
+                        Task existing = taskRepository.findById(p.getId()).orElse(null);
+                        if (existing != null) {
+                            // copy relevant scheduling fields and other updatable properties
+                            existing.setWorkingDate(p.getWorkingDate());
+                            existing.setStartTime(p.getStartTime());
+                            existing.setEndTime(p.getEndTime());
+                            existing.setPriority(p.getPriority());
+                            existing.setEstimatedTime(p.getEstimatedTime());
+                            existing.setDescription(p.getDescription());
+                            existing.setType(p.getType());
+                            existing.setState(p.getState());
+                            existing.setDueDate(p.getDueDate());
+                            existing.setDueTime(p.getDueTime());
+                            safeSave(existing);
+                            continue;
                         }
                     }
+
+                    // Try to match by unique-ish keys (title + dueDate + estimatedTime)
+                    Optional<Task> match = taskRepository.findByUserIdAndTitle(user.getId(), p.getTitle());
+                    if (match.isPresent()) {
+                        Task existing = match.get();
+                        existing.setWorkingDate(p.getWorkingDate());
+                        existing.setStartTime(p.getStartTime());
+                        existing.setEndTime(p.getEndTime());
+                        existing.setPriority(p.getPriority());
+                        existing.setEstimatedTime(p.getEstimatedTime());
+                        existing.setDescription(p.getDescription());
+                        existing.setType(p.getType());
+                        existing.setState(p.getState());
+                        existing.setDueDate(p.getDueDate());
+                        existing.setDueTime(p.getDueTime());
+                        safeSave(existing);
+                    } else {
+                        // create new planned task
+                        p.setId(null); // ensure new
+                        p.setUser(user);
+                        safeSave(p);
+                    }
                 } catch (Exception ex) {
-                    // AI planning failed; continue with existing flow
+                    logger.error("Error persisting planned task for user {}: {}", user.getId(), ex.getMessage(), ex);
+                    // continue with next planned item
                 }
             }
 
-    // After attempting scheduling, check if task covers full estimatedTime
-    Integer estimatedObj = task.getEstimatedTime();
-    int estimated = estimatedObj != null ? estimatedObj : 0;
-        int assignedMinutes = 0;
-        if (task.getWorkingDate() != null && task.getStartTime() != null && task.getEndTime() != null) {
-            assignedMinutes = (int) ChronoUnit.MINUTES.between(task.getStartTime(), task.getEndTime());
-            if (assignedMinutes < 0) assignedMinutes = 0;
-        }
-
-        if (assignedMinutes >= estimated || estimated == 0) {
-            // single task covers estimate or nothing to schedule
-            Task saved = taskRepository.save(task);
+            // Recalculate availability after applying the plan
             userService.recalculateAvailableHours(user);
-            return saved;
-        }
 
-        // Need to create segmentation for remaining minutes
-        int remaining = estimated - assignedMinutes;
-        int remainingSlots = (int) Math.ceil(remaining / 30.0);
-
-        // Save parent task first (it may hold the first assigned block)
-        Task parent = taskRepository.save(task);
-
-        // Build occupied set from existing tasks (including parent assigned slots)
-        java.util.Set<String> occupied = new java.util.HashSet<>();
-        List<Task> existing = taskRepository.findByUserId(user.getId());
-        for (Task t : existing) {
-            if (t.getWorkingDate() == null || t.getStartTime() == null || t.getEndTime() == null) continue;
-            LocalDate d = t.getWorkingDate();
-            LocalTime cur = t.getStartTime();
-            while (cur.isBefore(t.getEndTime())) {
-                occupied.add(d.toString() + "#" + cur.toString());
-                cur = cur.plusMinutes(30);
-            }
-        }
-
-        // Remove parent's assigned slots from remaining search if parent has assigned block
-        if (parent.getWorkingDate() != null && parent.getStartTime() != null && parent.getEndTime() != null) {
-            LocalDate pd = parent.getWorkingDate();
-            LocalTime pc = parent.getStartTime();
-            while (pc.isBefore(parent.getEndTime())) {
-                String k = pd.toString() + "#" + pc.toString();
-                if (occupied.contains(k)) occupied.remove(k);
-                pc = pc.plusMinutes(30);
-            }
-        }
-
-        // Collect candidate slots from user availability
-        Map<String, java.util.List<String>> avail = user.getAvailableHours();
-        java.util.List<Slot> candidates = new java.util.ArrayList<>();
-        LocalDate startDate = LocalDate.now().plusDays(1);
-        LocalDate deadline = parent.getDueDate();
-        LocalTime deadlineTime = parent.getDueTime() != null ? parent.getDueTime() : LocalTime.of(23,59);
-        for (LocalDate d = startDate; d != null && !d.isAfter(deadline); d = d.plusDays(1)) {
-            String key = dayNameFor(d.getDayOfWeek().getValue() % 7);
-            java.util.List<String> free = avail.get(key);
-            if (free == null) continue;
-            for (String slot : free) {
-                String[] parts = slot.split("-");
-                if (parts.length != 2) continue;
-                try {
-                    LocalTime s = LocalTime.parse(parts[0]);
-                    LocalTime e = LocalTime.parse(parts[1]);
-                    if (d.equals(deadline) && e.isAfter(deadlineTime)) e = deadlineTime;
-                    LocalTime cur = s;
-                    while (cur.plusMinutes(30).isBefore(e) || cur.plusMinutes(30).equals(e)) {
-                        String keySlot = d.toString() + "#" + cur.toString();
-                        if (!occupied.contains(keySlot)) candidates.add(new Slot(d, cur, cur.plusMinutes(30)));
-                        cur = cur.plusMinutes(30);
-                    }
-                } catch (Exception ex) { }
-            }
-        }
-
-        if (candidates.isEmpty()) {
-            // nothing we can do, return parent as saved
+            // Return the (possibly updated) version of the task that the client created
+            if (savedParent.getId() != null) return taskRepository.findById(savedParent.getId()).orElse(savedParent);
+            // fallback: try to find by title/dueDate
+            List<Task> candidates = taskRepository.findByUserIdAndTitle(user.getId(), savedParent.getTitle()).map(java.util.List::of).orElseGet(java.util.ArrayList::new);
+            if (!candidates.isEmpty()) return candidates.get(0);
+            return savedParent;
+        } catch (Exception ex) {
+            logger.error("AI planner call failed for user {}: {}", user.getId(), ex.getMessage());
+            // In case AI planner fails, return the saved parent and let client retry planning later
             userService.recalculateAvailableHours(user);
-            return parent;
+            return savedParent;
         }
-
-        // Group contiguous candidate slots into segments until we cover remainingSlots
-        List<Block> blocks = findContiguousBlocks(candidates, remainingSlots);
-        List<List<Slot>> allocation = new java.util.ArrayList<>();
-        int allocated = 0;
-        for (Block b : blocks) {
-            if (allocated >= remainingSlots) break;
-            List<Slot> seq = b.slots;
-            int take = Math.min(seq.size(), remainingSlots - allocated);
-            allocation.add(seq.subList(0, take));
-            allocated += take;
-        }
-
-        // If still not enough, take non-contiguous slots
-        if (allocated < remainingSlots) {
-            for (Slot s : candidates) {
-                if (allocated >= remainingSlots) break;
-                // skip slots already used in allocation
-                boolean used = false;
-                for (List<Slot> g : allocation) for (Slot x : g) if (x.date.equals(s.date) && x.start.equals(s.start)) used = true;
-                if (used) continue;
-                allocation.add(java.util.List.of(s));
-                allocated++;
-            }
-        }
-
-        // Create segments as child tasks
-        int totalSegments = allocation.size() + (assignedMinutes>0 ? 1 : 0);
-        int segIndex = 1;
-        // Update parent meta if it has assigned block
-        if (assignedMinutes > 0) {
-            parent.setSegmentIndex(segIndex);
-            parent.setTotalSegments(totalSegments);
-            parent.setDescription((parent.getDescription() == null ? "" : parent.getDescription() + " \n") + "Avance " + segIndex + "/" + totalSegments + " de " + parent.getTitle());
-            taskRepository.save(parent);
-            segIndex++;
-        }
-
-        for (List<Slot> group : allocation) {
-            LocalDate d = group.get(0).date;
-            LocalTime s = group.get(0).start;
-            LocalTime e = group.get(group.size()-1).end;
-            Task seg = new Task();
-            seg.setTitle(parent.getTitle());
-            seg.setClassId(parent.getClassId());
-            seg.setDueDate(parent.getDueDate());
-            seg.setDueTime(parent.getDueTime());
-            seg.setWorkingDate(d);
-            seg.setStartTime(s);
-            seg.setEndTime(e);
-            seg.setPriority(parent.getPriority());
-            int minutes = (int) ChronoUnit.MINUTES.between(s, e);
-            seg.setEstimatedTime(minutes);
-            seg.setDescription("Avance " + segIndex + "/" + totalSegments + " de " + parent.getTitle());
-            seg.setType(parent.getType());
-            seg.setState(parent.getState());
-            seg.setUser(parent.getUser());
-            seg.setParentId(parent.getId());
-            seg.setSegmentIndex(segIndex);
-            seg.setTotalSegments(totalSegments);
-            taskRepository.save(seg);
-            segIndex++;
-        }
-
-        // Recalculate availability and return parent
-        userService.recalculateAvailableHours(user);
-        return parent;
     }
 
     /**
@@ -309,7 +215,7 @@ public class TaskService {
         }
 
         // Basic preemption: try to move lower-priority tasks to free up slots
-        List<Task> existing = taskRepository.findByUserId(user.getId());
+    List<Task> existing = safeFindByUserId(user.getId());
         // sort by priority ascending (Low -> High) so we try to move lower priority first
         existing.sort(java.util.Comparator.comparingInt(this::priorityValue));
 
@@ -367,7 +273,7 @@ public class TaskService {
                 t.setWorkingDate(s1.date);
                 t.setStartTime(s1.start);
                 t.setEndTime(alt.get(tNeeded-1).end);
-                taskRepository.save(t);
+                safeSave(t);
                 // mark occupied with new slots
                 LocalTime cur = t.getStartTime();
                 while (cur.isBefore(t.getEndTime())) {
@@ -547,7 +453,7 @@ public class TaskService {
 
         // build occupied slots for user
         java.util.Set<String> occupied = new java.util.HashSet<>();
-        List<Task> existing = taskRepository.findByUserId(user.getId());
+    List<Task> existing = safeFindByUserId(user.getId());
         for (Task t : existing) {
             if (t.getWorkingDate() == null || t.getStartTime() == null || t.getEndTime() == null) continue;
             LocalDate td = t.getWorkingDate();
@@ -624,7 +530,45 @@ public class TaskService {
      */
     @Transactional(readOnly = true)
     public List<Task> getAllTasksByUser(Long userId) {
-        return taskRepository.findByUserId(userId);
+        return safeFindByUserId(userId);
+    }
+
+    // Wrapper to fetch tasks with logging and defensive handling to help debug production failures
+    private List<Task> safeFindByUserId(Long userId) {
+        try {
+            List<Task> list = taskRepository.findByUserId(userId);
+            if (list == null) {
+                logger.debug("safeFindByUserId returned null for userId {}", userId);
+                return new java.util.ArrayList<>();
+            }
+            logger.debug("safeFindByUserId userId {} returned {} tasks", userId, list.size());
+            return list;
+        } catch (Exception e) {
+            logger.error("Error fetching tasks for user {}: {}", userId, e.getMessage(), e);
+            throw e;
+        }
+    }
+
+    // Save wrapper that logs task details on error to help debug production failures
+    private Task safeSave(Task task) {
+        try {
+            logger.debug("Saving task (title={}, userId={}, dueDate={}, workingDate={}, start={}, end={})",
+                    task == null ? null : task.getTitle(),
+                    task == null || task.getUser() == null ? null : task.getUser().getId(),
+                    task == null ? null : task.getDueDate(),
+                    task == null ? null : task.getWorkingDate(),
+                    task == null ? null : task.getStartTime(),
+                    task == null ? null : task.getEndTime()
+            );
+            return taskRepository.save(task);
+        } catch (Exception e) {
+            try {
+                logger.error("Failed to save task: {}", task == null ? "<null>" : task.toString(), e);
+            } catch (Exception ex) {
+                logger.error("Failed to save task and toString() also failed", e);
+            }
+            throw e;
+        }
     }
 
     /**
@@ -791,7 +735,7 @@ public class TaskService {
         task.setState(taskDetails.getState());
 
         validateTask(task);
-        Task saved = taskRepository.save(task);
+    Task saved = safeSave(task);
         userService.recalculateAvailableHours(task.getUser());
         return saved;
     }
@@ -855,7 +799,7 @@ public class TaskService {
                 .orElseThrow(() -> new IllegalArgumentException("Tarea no encontrada con id: " + taskId));
 
         task.setClassId(classId);
-        Task saved = taskRepository.save(task);
+    Task saved = safeSave(task);
         userService.recalculateAvailableHours(task.getUser());
         return saved;
     }
@@ -868,7 +812,7 @@ public class TaskService {
                 .orElseThrow(() -> new IllegalArgumentException("Tarea no encontrada con id: " + taskId));
 
         task.setClassId(null);
-        Task saved = taskRepository.save(task);
+    Task saved = safeSave(task);
         userService.recalculateAvailableHours(task.getUser());
         return saved;
     }
@@ -881,7 +825,7 @@ public class TaskService {
                 .orElseThrow(() -> new IllegalArgumentException("Tarea no encontrada con id: " + taskId));
 
         task.setState(newState);
-        Task saved = taskRepository.save(task);
+    Task saved = safeSave(task);
         userService.recalculateAvailableHours(task.getUser());
         return saved;
     }
