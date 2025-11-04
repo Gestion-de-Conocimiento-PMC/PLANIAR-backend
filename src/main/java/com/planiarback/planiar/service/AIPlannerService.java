@@ -20,7 +20,7 @@ import org.slf4j.LoggerFactory;
 @Service
 public class AIPlannerService {
 
-    @Value("${ai.useGemini:false}")
+    @Value("${ai.useGemini:true}")
     private boolean useGemini;
 
     @Autowired
