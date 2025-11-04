@@ -12,6 +12,9 @@ import java.time.LocalTime;
 import java.time.temporal.ChronoUnit;
 import java.util.Map;
 import java.util.List;
+import java.util.Objects;
+
+import com.planiarback.planiar.service.AIPlannerService;
 import java.util.Optional;
 
 @Service
@@ -21,11 +24,13 @@ public class TaskService {
     private final TaskRepository taskRepository;
     private final UserRepository userRepository;
     private final UserService userService;
+    private final AIPlannerService aiPlannerService;
 
-    public TaskService(TaskRepository taskRepository, UserRepository userRepository, UserService userService) {
+    public TaskService(TaskRepository taskRepository, UserRepository userRepository, UserService userService, AIPlannerService aiPlannerService) {
         this.taskRepository = taskRepository;
         this.userRepository = userRepository;
         this.userService = userService;
+        this.aiPlannerService = aiPlannerService;
     }
 
     /**
@@ -55,6 +60,31 @@ public class TaskService {
                 // scheduling failed, proceed without schedule
             }
         }
+
+            // If still not assigned, invoke AI planner to reorganize user's tasks (including this one)
+            if (task.getWorkingDate() == null && task.getStartTime() == null && task.getEndTime() == null) {
+                try {
+                    List<Task> all = taskRepository.findByUserId(user.getId());
+                    all.add(task);
+                    List<Task> planned = aiPlannerService.planTasks(all, user.getAvailableHours());
+                    List<Task> saved = new java.util.ArrayList<>();
+                    for (Task p : planned) {
+                        if (p.getUser() == null) p.setUser(user);
+                        saved.add(taskRepository.save(p));
+                    }
+                    // try to find the saved version of our new task
+                    for (Task s : saved) {
+                        if (s.getTitle() != null && s.getTitle().equals(task.getTitle())
+                                && Objects.equals(s.getDueDate(), task.getDueDate())
+                                && Objects.equals(s.getEstimatedTime(), task.getEstimatedTime())) {
+                            userService.recalculateAvailableHours(user);
+                            return s;
+                        }
+                    }
+                } catch (Exception ex) {
+                    // AI planning failed; continue with existing flow
+                }
+            }
 
     // After attempting scheduling, check if task covers full estimatedTime
     Integer estimatedObj = task.getEstimatedTime();
