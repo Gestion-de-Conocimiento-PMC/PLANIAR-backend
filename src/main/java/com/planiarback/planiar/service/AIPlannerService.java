@@ -14,6 +14,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.annotation.Autowired;
 
 import com.planiarback.planiar.service.GeminiClient;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Service
 public class AIPlannerService {
@@ -25,12 +27,14 @@ public class AIPlannerService {
     private GeminiClient geminiClient;
 
     private final ObjectMapper mapper = new ObjectMapper();
+    private static final Logger logger = LoggerFactory.getLogger(AIPlannerService.class);
 
     /**
      * Plan tasks using a simple heuristic that respects availableHours and constraints.
      * This is a local planner used as a fallback; in the future this may call an external AI.
      */
     public List<Task> planTasks(List<Task> tasks, Map<String, List<String>> availableHours) {
+        logger.info("AIPlannerService.planTasks called with {} tasks; useGemini={} ", tasks == null ? 0 : tasks.size(), useGemini);
         if (tasks == null) return Collections.emptyList();
 
         // Work on copies to avoid mutating caller objects unexpectedly
@@ -168,10 +172,12 @@ public class AIPlannerService {
         for (Task t : copy) if (t.getWorkingDate() == null || t.getStartTime() == null || t.getEndTime() == null) { needExternal = true; break; }
 
         if (useGemini && needExternal) {
+            logger.info("Need external AI (useGemini=true && needExternal=true). Will call GeminiClient.generateText()");
             try {
                 String prompt = buildGeminiPrompt(copy, availableHours);
                 Optional<String> resp = geminiClient.generateText(prompt);
                 if (resp.isPresent()) {
+                    logger.info("Gemini returned response (length={})", resp.get().length());
                     String text = resp.get();
                     // Expect JSON array of tasks with id/title/workingDate/startTime/endTime
                     try {
@@ -188,13 +194,16 @@ public class AIPlannerService {
                                 if (n.has("endTime") && !n.get("endTime").isNull()) t.setEndTime(LocalTime.parse(n.get("endTime").asText()));
                                 out.add(t);
                             }
+                            logger.info("Parsed {} tasks from Gemini response", out.size());
                             return out;
                         }
                     } catch (Exception ex) {
+                        logger.warn("Failed to parse Gemini response: {}", ex.getMessage());
                         // parse failed - log and fall through to return copy
                     }
                 }
             } catch (Exception ex) {
+                logger.error("External AI (Gemini) call failed: {}", ex.getMessage(), ex);
                 // external AI failed; ignore and return heuristic copy
             }
         }

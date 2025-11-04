@@ -53,7 +53,13 @@ public class TaskService {
         // rely on the AI planner to fully reorganize (avoid heavy local scheduling).
         if (task.getWorkingDate() == null && task.getStartTime() == null && task.getEndTime() == null) {
             try {
-                quickAssignDueDate(task, user);
+                boolean assigned = quickAssignDueDate(task, user);
+                if (assigned) {
+                    logger.info("quickAssignDueDate assigned task '{}' for user {} -> workingDate={}, start={}, end={}",
+                            task.getTitle(), userId, task.getWorkingDate(), task.getStartTime(), task.getEndTime());
+                } else {
+                    logger.info("quickAssignDueDate did not find block for task '{}' user {} (will still save and call AI)", task.getTitle(), userId);
+                }
             } catch (Exception ex) {
                 logger.warn("quickAssignDueDate failed for user {}: {}", userId, ex.getMessage());
             }
@@ -64,12 +70,14 @@ public class TaskService {
 
         // Invoke AI planner to produce a global plan for the user's tasks (including the new one)
         try {
+            logger.info("Invoking AIPlannerService.planTasks for user {} with {} existing tasks", user.getId(), taskRepository.countByUserId(user.getId()));
             List<Task> all = safeFindByUserId(user.getId());
             // ensure the saved parent is present in the list
             boolean containsParent = all.stream().anyMatch(t -> t.getId() != null && t.getId().equals(savedParent.getId()));
             if (!containsParent) all.add(savedParent);
 
             List<Task> planned = aiPlannerService.planTasks(all, user.getAvailableHours());
+            logger.info("AIPlannerService.planTasks returned {} planned items for user {}", planned == null ? 0 : planned.size(), user.getId());
 
             // Persist the planner output: update existing tasks when possible, or create new ones.
             for (Task p : planned) {
