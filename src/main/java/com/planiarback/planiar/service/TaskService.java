@@ -49,8 +49,9 @@ public class TaskService {
             }
         }
 
-        // After attempting scheduling, check if task covers full estimatedTime
-        int estimated = task.getEstimatedTime();
+    // After attempting scheduling, check if task covers full estimatedTime
+    Integer estimatedObj = task.getEstimatedTime();
+    int estimated = estimatedObj != null ? estimatedObj : 0;
         int assignedMinutes = 0;
         if (task.getWorkingDate() != null && task.getStartTime() != null && task.getEndTime() != null) {
             assignedMinutes = (int) ChronoUnit.MINUTES.between(task.getStartTime(), task.getEndTime());
@@ -309,7 +310,7 @@ public class TaskService {
         for (Task t : existing) {
             if (priorityValue(t) >= priorityValue(task)) continue; // only move lower priority
             if (t.getWorkingDate() == null || t.getStartTime() == null || t.getEndTime() == null) continue;
-            int tNeeded = (int) Math.ceil(Math.max(0, t.getEstimatedTime()) / 30.0);
+            int tNeeded = (int) Math.ceil(( (t.getEstimatedTime() != null ? t.getEstimatedTime() : 0) ) / 30.0);
             // free current slots of t
             java.util.List<String> tKeys = new java.util.ArrayList<>();
             LocalDate td = t.getWorkingDate();
@@ -731,7 +732,7 @@ public class TaskService {
             throw new IllegalArgumentException("El tipo no puede estar vacío si se proporciona");
         }
 
-        if (task.getEstimatedTime() <= 0) {
+        if (task.getEstimatedTime() == null || task.getEstimatedTime() <= 0) {
             throw new IllegalArgumentException("El tiempo estimado debe ser mayor a 0");
         }
     }

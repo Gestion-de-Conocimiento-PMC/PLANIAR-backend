@@ -241,16 +241,16 @@ public class Task {
     }
 
     /**
-     * @return int return the estimatedTime
+     * @return Integer return the estimatedTime
      */
-    public int getEstimatedTime() {
+    public Integer getEstimatedTime() {
         return estimatedTime;
     }
 
     /**
      * @param estimatedTime the estimatedTime to set
      */
-    public void setEstimatedTime(int estimatedTime) {
+    public void setEstimatedTime(Integer estimatedTime) {
         this.estimatedTime = estimatedTime;
     }
 
