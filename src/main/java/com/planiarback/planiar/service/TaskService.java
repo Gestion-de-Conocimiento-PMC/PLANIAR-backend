@@ -353,6 +353,57 @@ public class TaskService {
             }
         }
 
+        // Safe fallback: if analysis didn't assign the task, try to find the latest
+        // contiguous block of free 30-min slots (ending as late as possible) before the deadline
+        // that can accommodate the neededSlots and assign it.
+        for (LocalDate d = deadline; !d.isBefore(startDate); d = d.minusDays(1)) {
+            String dayKey = dayNameFor(d.getDayOfWeek().getValue() % 7);
+            java.util.List<String> freeSlots = avail.get(dayKey);
+            if (freeSlots == null) continue;
+
+            // Build list of available 30-min Slot for this day excluding occupied
+            java.util.List<Slot> dayCandidates = new java.util.ArrayList<>();
+            for (String slot : freeSlots) {
+                String[] parts = slot.split("-");
+                if (parts.length != 2) continue;
+                try {
+                    LocalTime s = LocalTime.parse(parts[0]);
+                    LocalTime e = LocalTime.parse(parts[1]);
+                    // trim if on deadline day
+                    if (d.equals(deadline) && e.isAfter(deadlineTime)) e = deadlineTime;
+                    if (!s.isBefore(e)) continue;
+                    LocalTime cur = s;
+                    while (cur.plusMinutes(30).isBefore(e) || cur.plusMinutes(30).equals(e)) {
+                        String key = d.toString() + "#" + cur.toString();
+                        if (!occupied.contains(key)) dayCandidates.add(new Slot(d, cur, cur.plusMinutes(30)));
+                        cur = cur.plusMinutes(30);
+                    }
+                } catch (Exception ex) {
+                    // ignore parse
+                }
+            }
+
+            if (dayCandidates.isEmpty()) continue;
+
+            // find contiguous blocks within this day's candidates
+            List<Block> dayBlocks = findContiguousBlocks(dayCandidates, neededSlots);
+            if (!dayBlocks.isEmpty()) {
+                // pick the block that ends the latest (best safe fallback)
+                Block best = dayBlocks.stream()
+                        .max(java.util.Comparator.comparing(b -> b.slots.get(b.slots.size() - 1).end))
+                        .orElse(dayBlocks.get(0));
+
+                int startIndex = Math.max(0, best.slots.size() - neededSlots);
+                List<Slot> chosen = best.slots.subList(startIndex, Math.min(startIndex + neededSlots, best.slots.size()));
+                if (!chosen.isEmpty()) {
+                    task.setWorkingDate(chosen.get(0).date);
+                    task.setStartTime(chosen.get(0).start);
+                    task.setEndTime(chosen.get(chosen.size() - 1).end);
+                    return true;
+                }
+            }
+        }
+
         return false;
     }
 
