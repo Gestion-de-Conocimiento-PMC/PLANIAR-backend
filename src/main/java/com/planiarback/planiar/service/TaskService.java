@@ -6,6 +6,7 @@ import com.planiarback.planiar.repository.TaskRepository;
 import com.planiarback.planiar.repository.UserRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Propagation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -20,7 +21,6 @@ import com.planiarback.planiar.service.AIPlannerService;
 import java.util.Optional;
 
 @Service
-@Transactional
 public class TaskService {
     private static final Logger logger = LoggerFactory.getLogger(TaskService.class);
 
@@ -39,6 +39,7 @@ public class TaskService {
     /**
      * Crear una nueva tarea
      */
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public Task createTask(Task task, Long userId) {
         // Simplified, memory-light create flow for low-memory deployment
         User user = userRepository.findById(userId)
@@ -66,9 +67,10 @@ public class TaskService {
         }
 
         // Save the (possibly minimally assigned) task quickly to avoid keeping big in-memory structures
-        Task savedParent = safeSave(task);
+        Task savedParent = saveTaskQuick(task);
 
-        // Invoke AI planner to produce a global plan for the user's tasks (including the new one)
+        // Invoke AI planner outside of any DB transaction to avoid holding a DB connection
+        List<Task> planned = null;
         try {
             logger.info("Invoking AIPlannerService.planTasks for user {} with {} existing tasks", user.getId(), taskRepository.countByUserId(user.getId()));
             List<Task> all = safeFindByUserId(user.getId());
@@ -76,38 +78,48 @@ public class TaskService {
             boolean containsParent = all.stream().anyMatch(t -> t.getId() != null && t.getId().equals(savedParent.getId()));
             if (!containsParent) all.add(savedParent);
 
-            List<Task> planned = aiPlannerService.planTasks(all, user.getAvailableHours());
+            planned = aiPlannerService.planTasks(all, user.getAvailableHours());
             logger.info("AIPlannerService.planTasks returned {} planned items for user {}", planned == null ? 0 : planned.size(), user.getId());
+        } catch (Exception ex) {
+            logger.error("AI planner call failed for user {}: {}", user.getId(), ex.getMessage(), ex);
+            // In case AI planner fails, return the saved parent and let client retry planning later
+            userService.recalculateAvailableHours(user);
+            return savedParent;
+        }
 
-            // Persist the planner output: update existing tasks when possible, or create new ones.
-            for (Task p : planned) {
-                try {
-                    if (p.getUser() == null) p.setUser(user);
+        // Persist the planner output in a new transaction
+        try {
+            applyPlannedTasks(planned, user, savedParent);
+        } catch (Exception ex) {
+            logger.error("Error persisting planned tasks for user {}: {}", user.getId(), ex.getMessage(), ex);
+            // still return savedParent as best-effort
+        }
 
-                    if (p.getId() != null && taskRepository.existsById(p.getId())) {
-                        // update existing by id
-                        Task existing = taskRepository.findById(p.getId()).orElse(null);
-                        if (existing != null) {
-                            // copy relevant scheduling fields and other updatable properties
-                            existing.setWorkingDate(p.getWorkingDate());
-                            existing.setStartTime(p.getStartTime());
-                            existing.setEndTime(p.getEndTime());
-                            existing.setPriority(p.getPriority());
-                            existing.setEstimatedTime(p.getEstimatedTime());
-                            existing.setDescription(p.getDescription());
-                            existing.setType(p.getType());
-                            existing.setState(p.getState());
-                            existing.setDueDate(p.getDueDate());
-                            existing.setDueTime(p.getDueTime());
-                            safeSave(existing);
-                            continue;
-                        }
-                    }
+        // Recalculate availability after applying the plan
+        userService.recalculateAvailableHours(user);
 
-                    // Try to match by unique-ish keys (title + dueDate + estimatedTime)
-                    Optional<Task> match = taskRepository.findByUserIdAndTitle(user.getId(), p.getTitle());
-                    if (match.isPresent()) {
-                        Task existing = match.get();
+        // Return the most up-to-date version of the saved task
+        if (savedParent.getId() != null) return taskRepository.findById(savedParent.getId()).orElse(savedParent);
+        List<Task> candidates = taskRepository.findByUserIdAndTitle(user.getId(), savedParent.getTitle()).map(java.util.List::of).orElseGet(java.util.ArrayList::new);
+        if (!candidates.isEmpty()) return candidates.get(0);
+        return savedParent;
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    protected Task saveTaskQuick(Task task) {
+        return safeSave(task);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    protected void applyPlannedTasks(List<Task> planned, User user, Task savedParent) {
+        if (planned == null) return;
+        for (Task p : planned) {
+            try {
+                if (p.getUser() == null) p.setUser(user);
+
+                if (p.getId() != null && taskRepository.existsById(p.getId())) {
+                    Task existing = taskRepository.findById(p.getId()).orElse(null);
+                    if (existing != null) {
                         existing.setWorkingDate(p.getWorkingDate());
                         existing.setStartTime(p.getStartTime());
                         existing.setEndTime(p.getEndTime());
@@ -119,32 +131,32 @@ public class TaskService {
                         existing.setDueDate(p.getDueDate());
                         existing.setDueTime(p.getDueTime());
                         safeSave(existing);
-                    } else {
-                        // create new planned task
-                        p.setId(null); // ensure new
-                        p.setUser(user);
-                        safeSave(p);
+                        continue;
                     }
-                } catch (Exception ex) {
-                    logger.error("Error persisting planned task for user {}: {}", user.getId(), ex.getMessage(), ex);
-                    // continue with next planned item
                 }
+
+                Optional<Task> match = taskRepository.findByUserIdAndTitle(user.getId(), p.getTitle());
+                if (match.isPresent()) {
+                    Task existing = match.get();
+                    existing.setWorkingDate(p.getWorkingDate());
+                    existing.setStartTime(p.getStartTime());
+                    existing.setEndTime(p.getEndTime());
+                    existing.setPriority(p.getPriority());
+                    existing.setEstimatedTime(p.getEstimatedTime());
+                    existing.setDescription(p.getDescription());
+                    existing.setType(p.getType());
+                    existing.setState(p.getState());
+                    existing.setDueDate(p.getDueDate());
+                    existing.setDueTime(p.getDueTime());
+                    safeSave(existing);
+                } else {
+                    p.setId(null);
+                    p.setUser(user);
+                    safeSave(p);
+                }
+            } catch (Exception ex) {
+                logger.error("Error persisting planned task for user {}: {}", user.getId(), ex.getMessage(), ex);
             }
-
-            // Recalculate availability after applying the plan
-            userService.recalculateAvailableHours(user);
-
-            // Return the (possibly updated) version of the task that the client created
-            if (savedParent.getId() != null) return taskRepository.findById(savedParent.getId()).orElse(savedParent);
-            // fallback: try to find by title/dueDate
-            List<Task> candidates = taskRepository.findByUserIdAndTitle(user.getId(), savedParent.getTitle()).map(java.util.List::of).orElseGet(java.util.ArrayList::new);
-            if (!candidates.isEmpty()) return candidates.get(0);
-            return savedParent;
-        } catch (Exception ex) {
-            logger.error("AI planner call failed for user {}: {}", user.getId(), ex.getMessage());
-            // In case AI planner fails, return the saved parent and let client retry planning later
-            userService.recalculateAvailableHours(user);
-            return savedParent;
         }
     }
 
@@ -718,6 +730,7 @@ public class TaskService {
     /**
      * Actualizar una tarea
      */
+    @Transactional
     public Task updateTask(Long id, Task taskDetails) {
         Task task = taskRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Tarea no encontrada con id: " + id));
@@ -751,6 +764,7 @@ public class TaskService {
     /**
      * Eliminar una tarea
      */
+    @Transactional
     public void deleteTask(Long id) {
         Task task = taskRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Tarea no encontrada con id: " + id));
@@ -762,6 +776,7 @@ public class TaskService {
     /**
      * Eliminar todas las tareas de un usuario
      */
+    @Transactional
     public void deleteAllUserTasks(Long userId) {
         taskRepository.deleteByUserId(userId);
         userRepository.findById(userId).ifPresent(userService::recalculateAvailableHours);
@@ -802,6 +817,7 @@ public class TaskService {
     /**
      * Asignar tarea a una clase
      */
+    @Transactional
     public Task assignTaskToClass(Long taskId, Long classId) {
         Task task = taskRepository.findById(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("Tarea no encontrada con id: " + taskId));
@@ -815,6 +831,7 @@ public class TaskService {
     /**
      * Remover tarea de una clase
      */
+    @Transactional
     public Task removeTaskFromClass(Long taskId) {
         Task task = taskRepository.findById(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("Tarea no encontrada con id: " + taskId));
@@ -828,6 +845,7 @@ public class TaskService {
     /**
      * Cambiar estado de una tarea
      */
+    @Transactional
     public Task updateTaskState(Long taskId, String newState) {
         Task task = taskRepository.findById(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("Tarea no encontrada con id: " + taskId));
