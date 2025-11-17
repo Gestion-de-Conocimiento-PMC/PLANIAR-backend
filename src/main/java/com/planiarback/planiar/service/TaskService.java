@@ -7,6 +7,8 @@ import com.planiarback.planiar.repository.UserRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -28,12 +30,14 @@ public class TaskService {
     private final UserRepository userRepository;
     private final UserService userService;
     private final AIPlannerService aiPlannerService;
+    private final TransactionTemplate transactionTemplate;
 
-    public TaskService(TaskRepository taskRepository, UserRepository userRepository, UserService userService, AIPlannerService aiPlannerService) {
+    public TaskService(TaskRepository taskRepository, UserRepository userRepository, UserService userService, AIPlannerService aiPlannerService, PlatformTransactionManager txManager) {
         this.taskRepository = taskRepository;
         this.userRepository = userRepository;
         this.userService = userService;
         this.aiPlannerService = aiPlannerService;
+        this.transactionTemplate = new TransactionTemplate(txManager);
     }
 
     /**
@@ -67,7 +71,7 @@ public class TaskService {
         }
 
         // Save the (possibly minimally assigned) task quickly to avoid keeping big in-memory structures
-        Task savedParent = saveTaskQuick(task);
+        Task savedParent = saveTaskQuickTransactional(task);
 
         // Invoke AI planner outside of any DB transaction to avoid holding a DB connection
         List<Task> planned = null;
@@ -89,7 +93,7 @@ public class TaskService {
 
         // Persist the planner output in a new transaction
         try {
-            applyPlannedTasks(planned, user, savedParent);
+            applyPlannedTasksTransactional(planned, user, savedParent);
         } catch (Exception ex) {
             logger.error("Error persisting planned tasks for user {}: {}", user.getId(), ex.getMessage(), ex);
             // still return savedParent as best-effort
@@ -105,21 +109,39 @@ public class TaskService {
         return savedParent;
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    protected Task saveTaskQuick(Task task) {
-        return safeSave(task);
+    // Use TransactionTemplate to start new transactions even when invoked from same class
+    protected Task saveTaskQuickTransactional(Task task) {
+        return transactionTemplate.execute(status -> safeSave(task));
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    protected void applyPlannedTasks(List<Task> planned, User user, Task savedParent) {
+    protected void applyPlannedTasksTransactional(List<Task> planned, User user, Task savedParent) {
         if (planned == null) return;
-        for (Task p : planned) {
-            try {
-                if (p.getUser() == null) p.setUser(user);
+        transactionTemplate.execute(status -> {
+            for (Task p : planned) {
+                try {
+                    if (p.getUser() == null) p.setUser(user);
 
-                if (p.getId() != null && taskRepository.existsById(p.getId())) {
-                    Task existing = taskRepository.findById(p.getId()).orElse(null);
-                    if (existing != null) {
+                    if (p.getId() != null && taskRepository.existsById(p.getId())) {
+                        Task existing = taskRepository.findById(p.getId()).orElse(null);
+                        if (existing != null) {
+                            existing.setWorkingDate(p.getWorkingDate());
+                            existing.setStartTime(p.getStartTime());
+                            existing.setEndTime(p.getEndTime());
+                            existing.setPriority(p.getPriority());
+                            existing.setEstimatedTime(p.getEstimatedTime());
+                            existing.setDescription(p.getDescription());
+                            existing.setType(p.getType());
+                            existing.setState(p.getState());
+                            existing.setDueDate(p.getDueDate());
+                            existing.setDueTime(p.getDueTime());
+                            safeSave(existing);
+                            continue;
+                        }
+                    }
+
+                    Optional<Task> match = taskRepository.findByUserIdAndTitle(user.getId(), p.getTitle());
+                    if (match.isPresent()) {
+                        Task existing = match.get();
                         existing.setWorkingDate(p.getWorkingDate());
                         existing.setStartTime(p.getStartTime());
                         existing.setEndTime(p.getEndTime());
@@ -131,33 +153,17 @@ public class TaskService {
                         existing.setDueDate(p.getDueDate());
                         existing.setDueTime(p.getDueTime());
                         safeSave(existing);
-                        continue;
+                    } else {
+                        p.setId(null);
+                        p.setUser(user);
+                        safeSave(p);
                     }
+                } catch (Exception ex) {
+                    logger.error("Error persisting planned task for user {}: {}", user.getId(), ex.getMessage(), ex);
                 }
-
-                Optional<Task> match = taskRepository.findByUserIdAndTitle(user.getId(), p.getTitle());
-                if (match.isPresent()) {
-                    Task existing = match.get();
-                    existing.setWorkingDate(p.getWorkingDate());
-                    existing.setStartTime(p.getStartTime());
-                    existing.setEndTime(p.getEndTime());
-                    existing.setPriority(p.getPriority());
-                    existing.setEstimatedTime(p.getEstimatedTime());
-                    existing.setDescription(p.getDescription());
-                    existing.setType(p.getType());
-                    existing.setState(p.getState());
-                    existing.setDueDate(p.getDueDate());
-                    existing.setDueTime(p.getDueTime());
-                    safeSave(existing);
-                } else {
-                    p.setId(null);
-                    p.setUser(user);
-                    safeSave(p);
-                }
-            } catch (Exception ex) {
-                logger.error("Error persisting planned task for user {}: {}", user.getId(), ex.getMessage(), ex);
             }
-        }
+            return null;
+        });
     }
 
     /**
