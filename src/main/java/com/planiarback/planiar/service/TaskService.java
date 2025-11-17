@@ -46,21 +46,23 @@ public class TaskService {
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public Task createTask(Task task, Long userId) {
         // Simplified, memory-light create flow for low-memory deployment
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new IllegalArgumentException("Usuario no encontrado con id: " + userId));
+        // Fetch the minimal user within a short transaction so connection is released quickly
+        User user = transactionTemplate.execute(status ->
+                userRepository.findById(userId)
+                        .orElseThrow(() -> new IllegalArgumentException("Usuario no encontrado con id: " + userId))
+        );
 
         task.setUser(user);
         validateTask(task);
-        // Ensure user's availability is up to date
-        userService.recalculateAvailableHours(user);
 
-        // If the task has no explicit schedule, do a quick lightweight assignment and then
-        // rely on the AI planner to fully reorganize (avoid heavy local scheduling).
+        // Attempt a quick local assignment using only in-transaction reads so DB connections
+        // are not left open across the external AI call. quickAssignDueDate will call
+        // safeFindByUserId which uses the repository; we wrap that read inside a short transaction.
         if (task.getWorkingDate() == null && task.getStartTime() == null && task.getEndTime() == null) {
             try {
-                boolean assigned = quickAssignDueDate(task, user);
+                boolean assigned = transactionTemplate.execute(status -> quickAssignDueDate(task, user));
                 if (assigned) {
-                    logger.info("quickAssignDueDate assigned task '{}' for user {} -> workingDate={}, start={}, end={}",
+                    logger.info("quickAssignDueDate assigned task '{}' for user {} -> workingDate={}, start={}, end= {}",
                             task.getTitle(), userId, task.getWorkingDate(), task.getStartTime(), task.getEndTime());
                 } else {
                     logger.info("quickAssignDueDate did not find block for task '{}' user {} (will still save and call AI)", task.getTitle(), userId);
@@ -73,21 +75,26 @@ public class TaskService {
         // Save the (possibly minimally assigned) task quickly to avoid keeping big in-memory structures
         Task savedParent = saveTaskQuickTransactional(task);
 
+        // Collect the user's tasks in a short read transaction, then release DB before calling AI
+        List<Task> all = transactionTemplate.execute(status -> {
+            List<Task> list = safeFindByUserId(user.getId());
+            // ensure the saved parent is present in the list
+            boolean containsParent = list.stream().anyMatch(t -> t.getId() != null && t.getId().equals(savedParent.getId()));
+            if (!containsParent) list.add(savedParent);
+            return list;
+        });
+
         // Invoke AI planner outside of any DB transaction to avoid holding a DB connection
         List<Task> planned = null;
         try {
-            logger.info("Invoking AIPlannerService.planTasks for user {} with {} existing tasks", user.getId(), taskRepository.countByUserId(user.getId()));
-            List<Task> all = safeFindByUserId(user.getId());
-            // ensure the saved parent is present in the list
-            boolean containsParent = all.stream().anyMatch(t -> t.getId() != null && t.getId().equals(savedParent.getId()));
-            if (!containsParent) all.add(savedParent);
-
+            logger.info("Invoking AIPlannerService.planTasks for user {} with {} existing tasks", user.getId(), all == null ? 0 : all.size());
             planned = aiPlannerService.planTasks(all, user.getAvailableHours());
             logger.info("AIPlannerService.planTasks returned {} planned items for user {}", planned == null ? 0 : planned.size(), user.getId());
         } catch (Exception ex) {
             logger.error("AI planner call failed for user {}: {}", user.getId(), ex.getMessage(), ex);
             // In case AI planner fails, return the saved parent and let client retry planning later
-            userService.recalculateAvailableHours(user);
+            // Recalculate availability in a short transaction
+            transactionTemplate.execute(status -> { userService.recalculateAvailableHours(user); return null; });
             return savedParent;
         }
 
@@ -99,8 +106,8 @@ public class TaskService {
             // still return savedParent as best-effort
         }
 
-        // Recalculate availability after applying the plan
-        userService.recalculateAvailableHours(user);
+        // Recalculate availability after applying the plan (short transaction)
+        transactionTemplate.execute(status -> { userService.recalculateAvailableHours(user); return null; });
 
         // Return the most up-to-date version of the saved task
         if (savedParent.getId() != null) return taskRepository.findById(savedParent.getId()).orElse(savedParent);
