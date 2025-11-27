@@ -10,6 +10,7 @@ import java.util.Arrays;
 @Configuration
 public class CorsConfig {
 
+    
     @Bean
     public WebMvcConfigurer corsConfigurer() {
         String originsEnv = System.getenv("FRONTEND_ORIGINS");
